@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Kode\Aop\Reflection;
 
+use Kode\Attributes\Attr;
+use Kode\Attributes\Reader;
+use Kode\Attributes\Meta;
 use ReflectionClass;
 use ReflectionMethod;
 use Kode\Aop\Attribute\Aspect;
@@ -33,6 +36,19 @@ use Kode\Aop\Attribute\Priority;
 class MetadataReader
 {
     /**
+     * 属性读取器实例
+     */
+    private static ?Reader $reader = null;
+
+    /**
+     * 获取属性读取器实例
+     */
+    private static function getReader(): Reader
+    {
+        return self::$reader ??= new Reader();
+    }
+
+    /**
      * 获取类上的切面注解
      *
      * @param ReflectionClass $class 类反射对象
@@ -49,11 +65,8 @@ class MetadataReader
      */
     public static function getAspect(ReflectionClass $class): ?Aspect
     {
-        $attributes = $class->getAttributes(Aspect::class);
-        if ($attributes === []) {
-            return null;
-        }
-        return $attributes[0]->newInstance();
+        $meta = Attr::get($class->getName(), Aspect::class);
+        return $meta?->getInstance();
     }
 
     /**
@@ -151,11 +164,13 @@ class MetadataReader
      */
     public static function getPriority(ReflectionMethod $method): ?Priority
     {
-        $attributes = $method->getAttributes(Priority::class);
-        if ($attributes === []) {
-            return null;
-        }
-        return $attributes[0]->newInstance();
+        $className = $method->getDeclaringClass()->getName();
+        $methodName = $method->getName();
+
+        $metaList = self::getReader()->getMethodAttrs($className, $methodName);
+        $meta = $metaList->get(Priority::class);
+
+        return $meta?->getInstance();
     }
 
     /**
@@ -168,10 +183,15 @@ class MetadataReader
      */
     private static function getMethodAttributes(ReflectionMethod $method, string $attributeClass): array
     {
-        $attributes = $method->getAttributes($attributeClass);
+        $className = $method->getDeclaringClass()->getName();
+        $methodName = $method->getName();
+
+        $metaList = self::getReader()->getMethodAttrs($className, $methodName);
+        $filteredList = $metaList->filter(fn(Meta $meta) => $meta->name === $attributeClass);
+
         return array_map(
-            static fn(\ReflectionAttribute $attr) => $attr->newInstance(),
-            $attributes
+            static fn(Meta $meta) => $meta->getInstance(),
+            $filteredList->all()
         );
     }
 
@@ -182,7 +202,8 @@ class MetadataReader
      */
     public static function clearCache(): void
     {
-        // 缓存由 PHP 原生反射机制管理，无需手动清理
+        self::$reader = null;
+        Attr::clear();
     }
 
     /**
@@ -207,12 +228,7 @@ class MetadataReader
      */
     public static function isAspectClass(string $className): bool
     {
-        try {
-            $reflection = new ReflectionClass($className);
-            return $reflection->getAttributes(Aspect::class) !== [];
-        } catch (\ReflectionException) {
-            return false;
-        }
+        return Attr::has($className, Aspect::class);
     }
 
     /**

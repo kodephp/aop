@@ -15,6 +15,40 @@ use ReflectionClass;
 use ReflectionMethod;
 
 /**
+ * 测试用的切面类
+ */
+#[Aspect]
+class TestAspect
+{
+    #[Before('execution(* Test->method(..))')]
+    #[Priority(10)]
+    public function beforeMethod(): void
+    {
+    }
+
+    #[After('execution(* Test->method2(..))')]
+    public function afterMethod(): void
+    {
+    }
+
+    #[Around('execution(* Test->method3(..))')]
+    public function aroundMethod(): void
+    {
+    }
+
+    public function normalMethod(): void
+    {
+    }
+}
+
+/**
+ * 非切面类
+ */
+class NonAspectClass
+{
+}
+
+/**
  * MetadataReader 测试类
  *
  * @package Kode\Aop\Tests\Reflection
@@ -32,10 +66,7 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetAspect(): void
     {
-        $aspectClass = new #[Aspect] class {
-        };
-
-        $reflection = new ReflectionClass($aspectClass);
+        $reflection = new ReflectionClass(TestAspect::class);
         $aspect = MetadataReader::getAspect($reflection);
 
         $this->assertInstanceOf(Aspect::class, $aspect);
@@ -48,14 +79,7 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetBefores(): void
     {
-        $aspectClass = new class {
-            #[Before('execution(* Test->method(..))')]
-            public function beforeMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+        $reflection = new ReflectionMethod(TestAspect::class, 'beforeMethod');
         $befores = MetadataReader::getBefores($reflection);
 
         $this->assertCount(1, $befores);
@@ -68,19 +92,12 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetAfters(): void
     {
-        $aspectClass = new class {
-            #[After('execution(* Test->method(..))')]
-            public function afterMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'afterMethod');
+        $reflection = new ReflectionMethod(TestAspect::class, 'afterMethod');
         $afters = MetadataReader::getAfters($reflection);
 
         $this->assertCount(1, $afters);
         $this->assertInstanceOf(After::class, $afters[0]);
-        $this->assertSame('execution(* Test->method(..))', $afters[0]->pointcut);
+        $this->assertSame('execution(* Test->method2(..))', $afters[0]->pointcut);
     }
 
     /**
@@ -88,19 +105,12 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetArounds(): void
     {
-        $aspectClass = new class {
-            #[Around('execution(* Test->method(..))')]
-            public function aroundMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'aroundMethod');
+        $reflection = new ReflectionMethod(TestAspect::class, 'aroundMethod');
         $arounds = MetadataReader::getArounds($reflection);
 
         $this->assertCount(1, $arounds);
         $this->assertInstanceOf(Around::class, $arounds[0]);
-        $this->assertSame('execution(* Test->method(..))', $arounds[0]->pointcut);
+        $this->assertSame('execution(* Test->method3(..))', $arounds[0]->pointcut);
     }
 
     /**
@@ -108,19 +118,11 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetPriority(): void
     {
-        $aspectClass = new class {
-            #[Before('execution(* Test->method(..))')]
-            #[Priority(100)]
-            public function beforeMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+        $reflection = new ReflectionMethod(TestAspect::class, 'beforeMethod');
         $priority = MetadataReader::getPriority($reflection);
 
         $this->assertInstanceOf(Priority::class, $priority);
-        $this->assertSame(100, $priority->value);
+        $this->assertSame(10, $priority->value);
     }
 
     /**
@@ -128,15 +130,7 @@ class MetadataReaderTest extends TestCase
      */
     public function testClearCache(): void
     {
-        $aspectClass = new class {
-            #[Before('execution(* Test->method(..))')]
-            public function beforeMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
-
+        $reflection = new ReflectionMethod(TestAspect::class, 'beforeMethod');
         MetadataReader::getBefores($reflection);
         MetadataReader::clearCache();
 
@@ -148,14 +142,8 @@ class MetadataReaderTest extends TestCase
      */
     public function testIsAspectClass(): void
     {
-        $aspectClass = new #[Aspect] class {
-        };
-
-        $nonAspectClass = new class {
-        };
-
-        $this->assertTrue(MetadataReader::isAspectClass($aspectClass::class));
-        $this->assertFalse(MetadataReader::isAspectClass($nonAspectClass::class));
+        $this->assertTrue(MetadataReader::isAspectClass(TestAspect::class));
+        $this->assertFalse(MetadataReader::isAspectClass(NonAspectClass::class));
     }
 
     /**
@@ -163,29 +151,7 @@ class MetadataReaderTest extends TestCase
      */
     public function testGetAspectMethods(): void
     {
-        $aspectClass = new #[Aspect] class {
-            #[Before('execution(* Test->method1(..))')]
-            #[Priority(10)]
-            public function beforeMethod(): void
-            {
-            }
-
-            #[After('execution(* Test->method2(..))')]
-            public function afterMethod(): void
-            {
-            }
-
-            #[Around('execution(* Test->method3(..))')]
-            public function aroundMethod(): void
-            {
-            }
-
-            public function normalMethod(): void
-            {
-            }
-        };
-
-        $methods = MetadataReader::getAspectMethods($aspectClass::class);
+        $methods = MetadataReader::getAspectMethods(TestAspect::class);
 
         $this->assertCount(3, $methods);
         $this->assertArrayHasKey('beforeMethod', $methods);
