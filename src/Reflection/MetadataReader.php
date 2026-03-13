@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Kode\Aop\Reflection;
 
-use Kode\Attributes\Attr;
-use Kode\Attributes\Reader;
 use ReflectionClass;
 use ReflectionMethod;
 use Kode\Aop\Attribute\Aspect;
@@ -34,19 +32,6 @@ use Kode\Aop\Attribute\Priority;
  */
 class MetadataReader
 {
-    /**
-     * 属性读取器实例
-     */
-    private static ?Reader $reader = null;
-
-    /**
-     * 获取属性读取器实例
-     */
-    private static function getReader(): Reader
-    {
-        return self::$reader ??= new Reader();
-    }
-
     /**
      * 获取类上的切面注解
      *
@@ -197,8 +182,7 @@ class MetadataReader
      */
     public static function clearCache(): void
     {
-        self::$reader = null;
-        Attr::clear();
+        // 缓存由 PHP 原生反射机制管理，无需手动清理
     }
 
     /**
