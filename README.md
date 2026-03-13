@@ -1,14 +1,14 @@
 # Kode/AOP - PHP 8.1+ 轻量级 AOP 框架
 
 [![PHP Version](https://img.shields.io/badge/PHP-%3E%3D8.1-8892BF)](https://php.net/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache--2.0-green)](LICENSE)
 
 基于 PHP 8.1+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件。
 
 ## ✨ 特性
 
 - **原生支持**：基于 PHP 8.1+ 原生属性（Attribute）实现，IDE 友好
-- **轻量级**：无框架依赖，可集成到任何现代 PHP 项目中
+- **轻量级**：依赖 `kode/attributes` 包，无其他框架依赖
 - **高性能**：使用缓存机制避免重复反射操作
 - **类型安全**：充分利用 PHP 8.1+ 的类型系统，支持 readonly 属性
 - **扩展性强**：支持前置通知（Before）、后置通知（After）、环绕通知（Around）
@@ -60,7 +60,7 @@ class LoggingAspect
 
 use Kode\Aop\Runtime\AspectKernel;
 
-$kernel = new AspectKernel();
+$kernel = AspectKernel::getInstance();
 $kernel->registerAspect(new LoggingAspect());
 $kernel->init();
 
@@ -257,7 +257,7 @@ class AopServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(AspectKernel::class, function () {
-            $kernel = new AspectKernel();
+            $kernel = AspectKernel::getInstance();
             $kernel->registerAspect(new \App\Aspects\LoggingAspect());
             $kernel->registerAspect(new \App\Aspects\TransactionAspect());
             $kernel->init();
@@ -289,7 +289,7 @@ services:
 
 return [
     Kode\Aop\Runtime\AspectKernel::class => function () {
-        $kernel = new Kode\Aop\Runtime\AspectKernel();
+        $kernel = Kode\Aop\Runtime\AspectKernel::getInstance();
         $kernel->registerAspect(new \App\Aspect\LoggingAspect());
         $kernel->init();
         return $kernel;
@@ -321,10 +321,11 @@ composer analyse
 
 - PHP >= 8.1
 - Composer >= 2.0
+- kode/attributes ^1.0
 
 ## 📄 许可证
 
-[MIT License](LICENSE)
+[Apache License 2.0](LICENSE)
 
 ## 🤝 贡献
 
@@ -333,4 +334,4 @@ composer analyse
 ## 📮 联系方式
 
 - Email: 382601296@qq.com
-- GitHub: https://github.com/kode/aop
+- GitHub: https://github.com/kodephp/aop

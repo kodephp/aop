@@ -124,26 +124,6 @@ class MetadataReaderTest extends TestCase
     }
 
     /**
-     * 测试缓存功能
-     */
-    public function testCacheFunctionality(): void
-    {
-        $aspectClass = new class {
-            #[Before('execution(* Test->method(..))')]
-            public function beforeMethod(): void
-            {
-            }
-        };
-
-        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
-
-        $befores1 = MetadataReader::getBefores($reflection);
-        $befores2 = MetadataReader::getBefores($reflection);
-
-        $this->assertSame($befores1, $befores2);
-    }
-
-    /**
      * 测试清空缓存
      */
     public function testClearCache(): void
@@ -158,14 +138,62 @@ class MetadataReaderTest extends TestCase
         $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
 
         MetadataReader::getBefores($reflection);
-        $stats = MetadataReader::getCacheStats();
-
-        $this->assertGreaterThan(0, $stats['methods']);
-
         MetadataReader::clearCache();
-        $stats = MetadataReader::getCacheStats();
 
-        $this->assertSame(0, $stats['classes']);
-        $this->assertSame(0, $stats['methods']);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * 测试检查类是否为切面类
+     */
+    public function testIsAspectClass(): void
+    {
+        $aspectClass = new #[Aspect] class {
+        };
+
+        $nonAspectClass = new class {
+        };
+
+        $this->assertTrue(MetadataReader::isAspectClass($aspectClass::class));
+        $this->assertFalse(MetadataReader::isAspectClass($nonAspectClass::class));
+    }
+
+    /**
+     * 测试获取切面类的所有通知方法
+     */
+    public function testGetAspectMethods(): void
+    {
+        $aspectClass = new #[Aspect] class {
+            #[Before('execution(* Test->method1(..))')]
+            #[Priority(10)]
+            public function beforeMethod(): void
+            {
+            }
+
+            #[After('execution(* Test->method2(..))')]
+            public function afterMethod(): void
+            {
+            }
+
+            #[Around('execution(* Test->method3(..))')]
+            public function aroundMethod(): void
+            {
+            }
+
+            public function normalMethod(): void
+            {
+            }
+        };
+
+        $methods = MetadataReader::getAspectMethods($aspectClass::class);
+
+        $this->assertCount(3, $methods);
+        $this->assertArrayHasKey('beforeMethod', $methods);
+        $this->assertArrayHasKey('afterMethod', $methods);
+        $this->assertArrayHasKey('aroundMethod', $methods);
+        $this->assertArrayNotHasKey('normalMethod', $methods);
+
+        $this->assertSame(10, $methods['beforeMethod']['priority']);
+        $this->assertSame(Priority::NORMAL, $methods['afterMethod']['priority']);
     }
 }

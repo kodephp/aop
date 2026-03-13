@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Kode\Aop\Reflection;
 
+use Kode\Attributes\Attr;
+use Kode\Attributes\Reader;
 use ReflectionClass;
 use ReflectionMethod;
 use Kode\Aop\Attribute\Aspect;
@@ -16,8 +18,8 @@ use Kode\Aop\Attribute\Priority;
 /**
  * 元数据读取器
  *
- * 用于读取类、方法上的注解信息，并提供缓存机制以提高性能。
- * 所有读取操作都会被缓存，避免重复的反射操作。
+ * 基于 kode/attributes 包实现的属性读取器，用于读取类、方法上的注解信息。
+ * 提供高性能的缓存机制，避免重复的反射操作。
  *
  * 支持的注解类型：
  * - Aspect：类级别，标记切面类
@@ -33,18 +35,17 @@ use Kode\Aop\Attribute\Priority;
 class MetadataReader
 {
     /**
-     * 类元数据缓存
-     *
-     * @var array<string, array>
+     * 属性读取器实例
      */
-    private static array $classMetadata = [];
+    private static ?Reader $reader = null;
 
     /**
-     * 方法元数据缓存
-     *
-     * @var array<string, array>
+     * 获取属性读取器实例
      */
-    private static array $methodMetadata = [];
+    private static function getReader(): Reader
+    {
+        return self::$reader ??= new Reader();
+    }
 
     /**
      * 获取类上的切面注解
@@ -63,12 +64,11 @@ class MetadataReader
      */
     public static function getAspect(ReflectionClass $class): ?Aspect
     {
-        $className = $class->getName();
-
-        return self::$classMetadata[$className]['aspect'] ??= (function () use ($class) {
-            $attributes = $class->getAttributes(Aspect::class);
-            return $attributes ? $attributes[0]->newInstance() : null;
-        })();
+        $attributes = $class->getAttributes(Aspect::class);
+        if ($attributes === []) {
+            return null;
+        }
+        return $attributes[0]->newInstance();
     }
 
     /**
@@ -88,10 +88,7 @@ class MetadataReader
      */
     public static function getBefores(ReflectionMethod $method): array
     {
-        return self::$methodMetadata[self::getMethodKey($method)]['befores'] ??= array_map(
-            static fn($attr) => $attr->newInstance(),
-            $method->getAttributes(Before::class)
-        );
+        return self::getMethodAttributes($method, Before::class);
     }
 
     /**
@@ -111,10 +108,7 @@ class MetadataReader
      */
     public static function getAfters(ReflectionMethod $method): array
     {
-        return self::$methodMetadata[self::getMethodKey($method)]['afters'] ??= array_map(
-            static fn($attr) => $attr->newInstance(),
-            $method->getAttributes(After::class)
-        );
+        return self::getMethodAttributes($method, After::class);
     }
 
     /**
@@ -134,10 +128,7 @@ class MetadataReader
      */
     public static function getArounds(ReflectionMethod $method): array
     {
-        return self::$methodMetadata[self::getMethodKey($method)]['arounds'] ??= array_map(
-            static fn($attr) => $attr->newInstance(),
-            $method->getAttributes(Around::class)
-        );
+        return self::getMethodAttributes($method, Around::class);
     }
 
     /**
@@ -157,10 +148,7 @@ class MetadataReader
      */
     public static function getPointcuts(ReflectionMethod $method): array
     {
-        return self::$methodMetadata[self::getMethodKey($method)]['pointcuts'] ??= array_map(
-            static fn($attr) => $attr->newInstance(),
-            $method->getAttributes(Pointcut::class)
-        );
+        return self::getMethodAttributes($method, Pointcut::class);
     }
 
     /**
@@ -178,21 +166,28 @@ class MetadataReader
      */
     public static function getPriority(ReflectionMethod $method): ?Priority
     {
-        return self::$methodMetadata[self::getMethodKey($method)]['priority'] ??= (function () use ($method) {
-            $attributes = $method->getAttributes(Priority::class);
-            return $attributes ? $attributes[0]->newInstance() : null;
-        })();
+        $attributes = $method->getAttributes(Priority::class);
+        if ($attributes === []) {
+            return null;
+        }
+        return $attributes[0]->newInstance();
     }
 
     /**
-     * 获取方法缓存键
+     * 获取方法上指定类型的属性实例数组
      *
+     * @template T of object
      * @param ReflectionMethod $method 方法反射对象
-     * @return string 缓存键
+     * @param class-string<T> $attributeClass 属性类名
+     * @return array<int, T> 属性实例数组
      */
-    private static function getMethodKey(ReflectionMethod $method): string
+    private static function getMethodAttributes(ReflectionMethod $method, string $attributeClass): array
     {
-        return $method->getDeclaringClass()->getName() . '::' . $method->getName();
+        $attributes = $method->getAttributes($attributeClass);
+        return array_map(
+            static fn(\ReflectionAttribute $attr) => $attr->newInstance(),
+            $attributes
+        );
     }
 
     /**
@@ -202,8 +197,8 @@ class MetadataReader
      */
     public static function clearCache(): void
     {
-        self::$classMetadata = [];
-        self::$methodMetadata = [];
+        self::$reader = null;
+        Attr::clear();
     }
 
     /**
@@ -211,13 +206,62 @@ class MetadataReader
      *
      * 用于调试和性能分析。
      *
-     * @return array{classes: int, methods: int} 缓存统计
+     * @return array<string, mixed> 缓存统计
      */
     public static function getCacheStats(): array
     {
         return [
-            'classes' => count(self::$classMetadata),
-            'methods' => count(self::$methodMetadata),
+            'note' => '缓存由 kode/attributes 包管理',
         ];
+    }
+
+    /**
+     * 检查类是否为切面类
+     *
+     * @param string $className 类名
+     * @return bool 是否为切面类
+     */
+    public static function isAspectClass(string $className): bool
+    {
+        try {
+            $reflection = new ReflectionClass($className);
+            return $reflection->getAttributes(Aspect::class) !== [];
+        } catch (\ReflectionException) {
+            return false;
+        }
+    }
+
+    /**
+     * 获取切面类的所有通知方法
+     *
+     * @param string $className 切面类名
+     * @return array<string, array{befores: array, afters: array, arounds: array, priority: int}> 方法元数据
+     */
+    public static function getAspectMethods(string $className): array
+    {
+        $reflection = new ReflectionClass($className);
+        $methods = [];
+
+        foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->isConstructor() || $method->isDestructor()) {
+                continue;
+            }
+
+            $befores = self::getBefores($method);
+            $afters = self::getAfters($method);
+            $arounds = self::getArounds($method);
+
+            if ($befores || $afters || $arounds) {
+                $priority = self::getPriority($method);
+                $methods[$method->getName()] = [
+                    'befores' => $befores,
+                    'afters' => $afters,
+                    'arounds' => $arounds,
+                    'priority' => $priority?->value ?? Priority::NORMAL,
+                ];
+            }
+        }
+
+        return $methods;
     }
 }

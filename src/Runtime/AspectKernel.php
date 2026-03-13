@@ -9,11 +9,6 @@ use ReflectionClass;
 use ReflectionMethod;
 use ReflectionNamedType;
 use ReflectionUnionType;
-use Kode\Aop\Attribute\Aspect;
-use Kode\Aop\Attribute\Before;
-use Kode\Aop\Attribute\After;
-use Kode\Aop\Attribute\Around;
-use Kode\Aop\Attribute\Priority;
 use Kode\Aop\Contract\AspectInterface;
 use Kode\Aop\Contract\AspectKernelInterface;
 use Kode\Aop\Reflection\MetadataReader;
@@ -110,13 +105,15 @@ class AspectKernel implements AspectKernelInterface
      */
     protected function validateAspect(object $aspect): void
     {
-        $reflection = Reflector::getClass($aspect);
+        if ($aspect instanceof AspectInterface) {
+            return;
+        }
 
-        if (!$aspect instanceof AspectInterface && !$reflection->getAttributes(Aspect::class)) {
+        if (!MetadataReader::isAspectClass($aspect::class)) {
             throw new AopException(
                 sprintf(
                     '切面类 %s 必须实现 AspectInterface 接口或使用 #[Aspect] 注解标记',
-                    $reflection->getName()
+                    $aspect::class
                 )
             );
         }
@@ -129,44 +126,19 @@ class AspectKernel implements AspectKernelInterface
      */
     protected function cacheAspectMetadata(object $aspect): void
     {
-        $reflection = Reflector::getClass($aspect);
-        $className = $reflection->getName();
+        $className = $aspect::class;
 
         if (isset(self::$aspectMetadataCache[$className])) {
             return;
         }
 
-        $metadata = [
+        $reflection = Reflector::getClass($aspect);
+        $methods = MetadataReader::getAspectMethods($className);
+
+        self::$aspectMetadataCache[$className] = [
             'class' => $reflection,
-            'methods' => [],
+            'methods' => $methods,
         ];
-
-        foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-            $methodMetadata = $this->extractMethodMetadata($method);
-            if ($methodMetadata !== []) {
-                $metadata['methods'][$method->getName()] = $methodMetadata;
-            }
-        }
-
-        self::$aspectMetadataCache[$className] = $metadata;
-    }
-
-    /**
-     * 提取方法元数据
-     *
-     * @param ReflectionMethod $method 方法反射对象
-     * @return array 方法元数据
-     */
-    protected function extractMethodMetadata(ReflectionMethod $method): array
-    {
-        $metadata = [
-            'befores' => MetadataReader::getBefores($method),
-            'afters' => MetadataReader::getAfters($method),
-            'arounds' => MetadataReader::getArounds($method),
-            'priority' => MetadataReader::getPriority($method)?->value ?? Priority::NORMAL,
-        ];
-
-        return $metadata['befores'] || $metadata['afters'] || $metadata['arounds'] ? $metadata : [];
     }
 
     /**
