@@ -4,7 +4,7 @@
     "keywords": ["aop", "aspect", "proxy", "attribute", "php81", "php82", "php83", "php84", "php85"],
     "homepage": "https://github.com/kodephp/aop",
     "license": "Apache-2.0",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "authors": [
         {
             "name": "Kode Team",
