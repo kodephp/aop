@@ -1,8 +1,28 @@
+# IDE
 .vscode
-.lock
+.idea
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Project specific
 .trae
-*/.cursor
-404.html
-thumbs.db
+.cursor
+
+# Build and cache
+.phpunit.result.cache
+coverage/
+vendor/
+
+# Lock files
 composer.lock
+package-lock.json
+
+# Temporary files
+*.log
+*.tmp
+*.cache

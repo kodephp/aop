@@ -16,116 +16,156 @@ use ReflectionMethod;
 
 /**
  * MetadataReader 测试类
+ *
+ * @package Kode\Aop\Tests\Reflection
+ * @author Kode Team <382601296@qq.com>
  */
 class MetadataReaderTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        MetadataReader::clearCache();
+    }
+
     /**
-     * 测试切面注解的读取
+     * 测试获取切面注解
      */
     public function testGetAspect(): void
     {
-        $class = new ReflectionClass(TestAspect::class);
-        $aspect = MetadataReader::getAspect($class);
-        
+        $aspectClass = new #[Aspect] class {
+        };
+
+        $reflection = new ReflectionClass($aspectClass);
+        $aspect = MetadataReader::getAspect($reflection);
+
         $this->assertInstanceOf(Aspect::class, $aspect);
+        $this->assertTrue($aspect->enabled);
+        $this->assertSame(0, $aspect->priority);
     }
 
     /**
-     * 测试前置通知注解的读取
+     * 测试获取前置通知注解
      */
     public function testGetBefores(): void
     {
-        $class = new ReflectionClass(TestAspect::class);
-        $method = new ReflectionMethod(TestAspect::class, 'beforeMethod');
-        $befores = MetadataReader::getBefores($method);
-        
+        $aspectClass = new class {
+            #[Before('execution(* Test->method(..))')]
+            public function beforeMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+        $befores = MetadataReader::getBefores($reflection);
+
         $this->assertCount(1, $befores);
         $this->assertInstanceOf(Before::class, $befores[0]);
-        $this->assertEquals("execution(* Test->method(..))", $befores[0]->expression);
+        $this->assertSame('execution(* Test->method(..))', $befores[0]->pointcut);
     }
 
     /**
-     * 测试后置通知注解的读取
+     * 测试获取后置通知注解
      */
     public function testGetAfters(): void
     {
-        $class = new ReflectionClass(TestAspect::class);
-        $method = new ReflectionMethod(TestAspect::class, 'afterMethod');
-        $afters = MetadataReader::getAfters($method);
-        
+        $aspectClass = new class {
+            #[After('execution(* Test->method(..))')]
+            public function afterMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'afterMethod');
+        $afters = MetadataReader::getAfters($reflection);
+
         $this->assertCount(1, $afters);
         $this->assertInstanceOf(After::class, $afters[0]);
-        $this->assertEquals("execution(* Test->method(..))", $afters[0]->expression);
+        $this->assertSame('execution(* Test->method(..))', $afters[0]->pointcut);
     }
 
     /**
-     * 测试环绕通知注解的读取
+     * 测试获取环绕通知注解
      */
     public function testGetArounds(): void
     {
-        $class = new ReflectionClass(TestAspect::class);
-        $method = new ReflectionMethod(TestAspect::class, 'aroundMethod');
-        $arounds = MetadataReader::getArounds($method);
-        
+        $aspectClass = new class {
+            #[Around('execution(* Test->method(..))')]
+            public function aroundMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'aroundMethod');
+        $arounds = MetadataReader::getArounds($reflection);
+
         $this->assertCount(1, $arounds);
         $this->assertInstanceOf(Around::class, $arounds[0]);
-        $this->assertEquals("execution(* Test->method(..))", $arounds[0]->expression);
+        $this->assertSame('execution(* Test->method(..))', $arounds[0]->pointcut);
     }
 
     /**
-     * 测试优先级注解的读取
+     * 测试获取优先级注解
      */
     public function testGetPriority(): void
     {
-        $class = new ReflectionClass(TestAspect::class);
-        $method = new ReflectionMethod(TestAspect::class, 'priorityMethod');
-        $priority = MetadataReader::getPriority($method);
-        
+        $aspectClass = new class {
+            #[Before('execution(* Test->method(..))')]
+            #[Priority(100)]
+            public function beforeMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+        $priority = MetadataReader::getPriority($reflection);
+
         $this->assertInstanceOf(Priority::class, $priority);
-        $this->assertEquals(100, $priority->value);
+        $this->assertSame(100, $priority->value);
     }
 
     /**
-     * 测试缓存清除功能
+     * 测试缓存功能
+     */
+    public function testCacheFunctionality(): void
+    {
+        $aspectClass = new class {
+            #[Before('execution(* Test->method(..))')]
+            public function beforeMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+
+        $befores1 = MetadataReader::getBefores($reflection);
+        $befores2 = MetadataReader::getBefores($reflection);
+
+        $this->assertSame($befores1, $befores2);
+    }
+
+    /**
+     * 测试清空缓存
      */
     public function testClearCache(): void
     {
-        // 先读取一些元数据以填充缓存
-        $class = new ReflectionClass(TestAspect::class);
-        $method = new ReflectionMethod(TestAspect::class, 'beforeMethod');
-        MetadataReader::getBefores($method);
-        
-        // 清除缓存
+        $aspectClass = new class {
+            #[Before('execution(* Test->method(..))')]
+            public function beforeMethod(): void
+            {
+            }
+        };
+
+        $reflection = new ReflectionMethod($aspectClass, 'beforeMethod');
+
+        MetadataReader::getBefores($reflection);
+        $stats = MetadataReader::getCacheStats();
+
+        $this->assertGreaterThan(0, $stats['methods']);
+
         MetadataReader::clearCache();
-        
-        // 重新读取（应该重新加载而不是使用缓存）
-        $befores = MetadataReader::getBefores($method);
-        
-        $this->assertCount(1, $befores);
-        $this->assertInstanceOf(Before::class, $befores[0]);
-    }
-}
+        $stats = MetadataReader::getCacheStats();
 
-#[Aspect]
-class TestAspect
-{
-    #[Before("execution(* Test->method(..))")]
-    public function beforeMethod(): void
-    {
-    }
-
-    #[After("execution(* Test->method(..))")]
-    public function afterMethod(): void
-    {
-    }
-
-    #[Around("execution(* Test->method(..))")]
-    public function aroundMethod(): void
-    {
-    }
-
-    #[Priority(100)]
-    public function priorityMethod(): void
-    {
+        $this->assertSame(0, $stats['classes']);
+        $this->assertSame(0, $stats['methods']);
     }
 }

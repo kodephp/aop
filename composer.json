@@ -1,13 +1,14 @@
 {
     "name": "kode/aop",
     "description": "基于 PHP 8.1+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件",
-    "keywords": ["aop", "aspect", "proxy", "attribute", "php81"],
-    "homepage": "https://github.com/kode/aop",
-    "license": "MIT",
+    "keywords": ["aop", "aspect", "proxy", "attribute", "php81", "php82", "php83"],
+    "homepage": "https://github.com/kodephp/aop",
+    "license": "Apache-2.0",
+    "version": "2.0.0",
     "authors": [
         {
             "name": "Kode Team",
-            "email": "team@kode.com"
+            "email": "382601296@qq.com"
         }
     ],
     "require": {
@@ -34,11 +35,16 @@
         "analyse": "phpstan analyse src tests --level=8",
         "cs-check": "phpcs src tests",
         "cs-fix": "phpcbf src tests",
-        "example": "php examples/example.php"
+        "example": "php examples/demo.php"
     },
     "config": {
         "sort-packages": true
     },
-    "minimum-stability": "dev",
-    "prefer-stable": true
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0-dev"
+        }
+    }
 }

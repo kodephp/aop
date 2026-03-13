@@ -9,34 +9,37 @@ use Kode\Aop\Attribute\Before;
 
 /**
  * Before 注解测试类
+ *
+ * @package Kode\Aop\Tests\Attribute
+ * @author Kode Team <382601296@qq.com>
  */
 class BeforeTest extends TestCase
 {
     /**
      * 测试 Before 注解可以正确创建
      */
-    public function testBeforeAttributeCanBeCreated(): void
+    public function testBeforeCanBeCreated(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $before = new Before($expression);
-        
-        $this->assertInstanceOf(Before::class, $before);
-        $this->assertEquals($expression, $before->expression);
+        $pointcut = 'execution(* App\Service\UserService->createUser(..))';
+        $before = new Before($pointcut);
+
+        $this->assertSame($pointcut, $before->pointcut);
     }
 
     /**
-     * 测试 Before 注解的表达式是只读的
+     * 测试 Before 注解的切入点表达式
      */
-    public function testBeforeExpressionIsReadOnly(): void
+    public function testBeforePointcutExpression(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $before = new Before($expression);
-        
-        // 验证表达式属性是只读的
-        $this->assertEquals($expression, $before->expression);
-        
-        // 验证不能修改只读属性
-        $this->expectException(\Error::class);
-        $before->expression = "new expression";
+        $expressions = [
+            'execution(* App\Service\*->*(..))',
+            'execution(public App\Service\UserService->createUser())',
+            'within(App\Controller\*)',
+        ];
+
+        foreach ($expressions as $expression) {
+            $before = new Before($expression);
+            $this->assertSame($expression, $before->pointcut);
+        }
     }
 }

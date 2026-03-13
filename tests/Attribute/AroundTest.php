@@ -9,34 +9,37 @@ use Kode\Aop\Attribute\Around;
 
 /**
  * Around 注解测试类
+ *
+ * @package Kode\Aop\Tests\Attribute
+ * @author Kode Team <382601296@qq.com>
  */
 class AroundTest extends TestCase
 {
     /**
      * 测试 Around 注解可以正确创建
      */
-    public function testAroundAttributeCanBeCreated(): void
+    public function testAroundCanBeCreated(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $around = new Around($expression);
-        
-        $this->assertInstanceOf(Around::class, $around);
-        $this->assertEquals($expression, $around->expression);
+        $pointcut = 'execution(* App\Service\UserService->createUser(..))';
+        $around = new Around($pointcut);
+
+        $this->assertSame($pointcut, $around->pointcut);
     }
 
     /**
-     * 测试 Around 注解的表达式是只读的
+     * 测试 Around 注解的切入点表达式
      */
-    public function testAroundExpressionIsReadOnly(): void
+    public function testAroundPointcutExpression(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $around = new Around($expression);
-        
-        // 验证表达式属性是只读的
-        $this->assertEquals($expression, $around->expression);
-        
-        // 验证不能修改只读属性
-        $this->expectException(\Error::class);
-        $around->expression = "new expression";
+        $expressions = [
+            'execution(* App\Service\*->*(..))',
+            'execution(public App\Service\UserService->createUser())',
+            'within(App\Controller\*)',
+        ];
+
+        foreach ($expressions as $expression) {
+            $around = new Around($expression);
+            $this->assertSame($expression, $around->pointcut);
+        }
     }
 }

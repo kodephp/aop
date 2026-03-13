@@ -11,6 +11,11 @@ use ReflectionMethod;
 
 /**
  * JoinPoint 测试类
+ *
+ * 测试连接点的创建、属性访问和参数操作
+ *
+ * @package Kode\Aop\Tests\Runtime
+ * @author Kode Team <382601296@qq.com>
  */
 class JoinPointTest extends TestCase
 {
@@ -19,23 +24,20 @@ class JoinPointTest extends TestCase
      */
     public function testJoinPointCanBeCreatedAndAccessed(): void
     {
-        // 创建模拟对象和反射信息
         $mockObject = new class {
             public function testMethod(string $param1, int $param2): string
             {
                 return $param1 . $param2;
             }
         };
-        
+
         $class = new ReflectionClass($mockObject);
         $method = new ReflectionMethod($mockObject, 'testMethod');
         $arguments = ['test', 123];
         $pointcut = 'execution(* Test->testMethod(..))';
-        
-        // 创建 JoinPoint
+
         $joinPoint = new JoinPoint($class, $method, $mockObject, $arguments, $pointcut);
-        
-        // 验证属性
+
         $this->assertSame($class, $joinPoint->getClass());
         $this->assertSame($method, $joinPoint->getMethod());
         $this->assertSame($mockObject, $joinPoint->getThis());
@@ -48,31 +50,108 @@ class JoinPointTest extends TestCase
      */
     public function testCanSetAndGetArguments(): void
     {
-        // 创建测试类
         $testClass = new class {
             public function testMethod(): void
             {
-                // 空方法，仅用于测试
             }
         };
-        
-        // 创建反射信息
+
         $class = new ReflectionClass($testClass);
         $method = new ReflectionMethod($testClass, 'testMethod');
         $arguments = ['original'];
         $pointcut = '';
-        
-        // 创建 JoinPoint
+
         $joinPoint = new JoinPoint($class, $method, $testClass, $arguments, $pointcut);
-        
-        // 验证初始参数
+
         $this->assertSame($arguments, $joinPoint->getArguments());
-        
-        // 设置新参数
+
         $newArguments = ['new', 'arguments'];
         $joinPoint->setArguments($newArguments);
-        
-        // 验证参数已更新
+
         $this->assertSame($newArguments, $joinPoint->getArguments());
+    }
+
+    /**
+     * 测试便捷方法 getMethodName
+     */
+    public function testGetMethodName(): void
+    {
+        $testClass = new class {
+            public function myTestMethod(): void
+            {
+            }
+        };
+
+        $class = new ReflectionClass($testClass);
+        $method = new ReflectionMethod($testClass, 'myTestMethod');
+
+        $joinPoint = new JoinPoint($class, $method, $testClass, [], '');
+
+        $this->assertSame('myTestMethod', $joinPoint->getMethodName());
+    }
+
+    /**
+     * 测试便捷方法 getClassName
+     */
+    public function testGetClassName(): void
+    {
+        $testClass = new class {
+            public function testMethod(): void
+            {
+            }
+        };
+
+        $class = new ReflectionClass($testClass);
+        $method = new ReflectionMethod($testClass, 'testMethod');
+        $className = $class->getName();
+
+        $joinPoint = new JoinPoint($class, $method, $testClass, [], '');
+
+        $this->assertSame($className, $joinPoint->getClassName());
+    }
+
+    /**
+     * 测试便捷方法 getArgument
+     */
+    public function testGetArgument(): void
+    {
+        $testClass = new class {
+            public function testMethod(): void
+            {
+            }
+        };
+
+        $class = new ReflectionClass($testClass);
+        $method = new ReflectionMethod($testClass, 'testMethod');
+        $arguments = ['first', 'second', 'third'];
+
+        $joinPoint = new JoinPoint($class, $method, $testClass, $arguments, '');
+
+        $this->assertSame('first', $joinPoint->getArgument(0));
+        $this->assertSame('second', $joinPoint->getArgument(1));
+        $this->assertSame('third', $joinPoint->getArgument(2));
+        $this->assertNull($joinPoint->getArgument(3));
+        $this->assertSame('default', $joinPoint->getArgument(3, 'default'));
+    }
+
+    /**
+     * 测试返回值获取
+     */
+    public function testGetResult(): void
+    {
+        $testClass = new class {
+            public function testMethod(): string
+            {
+                return 'result';
+            }
+        };
+
+        $class = new ReflectionClass($testClass);
+        $method = new ReflectionMethod($testClass, 'testMethod');
+        $result = 'test_result';
+
+        $joinPoint = new JoinPoint($class, $method, $testClass, [], '', $result);
+
+        $this->assertSame($result, $joinPoint->getResult());
     }
 }

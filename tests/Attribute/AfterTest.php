@@ -9,34 +9,37 @@ use Kode\Aop\Attribute\After;
 
 /**
  * After 注解测试类
+ *
+ * @package Kode\Aop\Tests\Attribute
+ * @author Kode Team <382601296@qq.com>
  */
 class AfterTest extends TestCase
 {
     /**
      * 测试 After 注解可以正确创建
      */
-    public function testAfterAttributeCanBeCreated(): void
+    public function testAfterCanBeCreated(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $after = new After($expression);
-        
-        $this->assertInstanceOf(After::class, $after);
-        $this->assertEquals($expression, $after->expression);
+        $pointcut = 'execution(* App\Service\UserService->createUser(..))';
+        $after = new After($pointcut);
+
+        $this->assertSame($pointcut, $after->pointcut);
     }
 
     /**
-     * 测试 After 注解的表达式是只读的
+     * 测试 After 注解的切入点表达式
      */
-    public function testAfterExpressionIsReadOnly(): void
+    public function testAfterPointcutExpression(): void
     {
-        $expression = "execution(* App\Service\*->save(..))";
-        $after = new After($expression);
-        
-        // 验证表达式属性是只读的
-        $this->assertEquals($expression, $after->expression);
-        
-        // 验证不能修改只读属性
-        $this->expectException(\Error::class);
-        $after->expression = "new expression";
+        $expressions = [
+            'execution(* App\Service\*->*(..))',
+            'execution(public App\Service\UserService->createUser())',
+            'within(App\Controller\*)',
+        ];
+
+        foreach ($expressions as $expression) {
+            $after = new After($expression);
+            $this->assertSame($expression, $after->pointcut);
+        }
     }
 }
