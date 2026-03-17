@@ -34,8 +34,8 @@ return [
     |
     */
     'cache' => [
-        'driver' => 'file', // 支持 file, apcu, redis
-        'path' => storage_path('aop/cache') ?? sys_get_temp_dir() . '/aop_cache',
+        'driver' => 'file',
+        'path' => sys_get_temp_dir() . '/aop_cache',
     ],
 
     /*
