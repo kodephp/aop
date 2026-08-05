@@ -141,6 +141,28 @@ class ChainAspect
     }
 }
 
+/**
+ * 把通知方法定义在 trait 中，由切面 use，验证"trait 中的通知"也能被正确发现并织入。
+ * 依赖 kode/attributes 2.x 的 inherited 读取能力。
+ */
+trait TraceTrait
+{
+    /** @var array<int, string> */
+    public array $trace = [];
+
+    #[Before('execution(* *IntService->run(..))')]
+    public function traceRun(): void
+    {
+        $this->trace[] = 'trait-before';
+    }
+}
+
+#[Aspect]
+class TraitAspect
+{
+    use TraceTrait;
+}
+
 class AopIntegrationTest extends TestCase
 {
     protected function setUp(): void
@@ -255,5 +277,33 @@ class AopIntegrationTest extends TestCase
         $proxy = Aop::proxy(IntService::class);
         $this->assertInstanceOf(IntService::class, $proxy);
         $this->assertSame(10, $proxy->run(5));
+    }
+
+    public function testAdviceDefinedInTraitIsWoven(): void
+    {
+        $aspect = new TraitAspect();
+        Aop::boot([$aspect]);
+
+        $proxy = Aop::proxy(IntService::class);
+        $this->assertInstanceOf(IntService::class, $proxy);
+
+        $proxy->run(1);
+
+        // 定义在 trait 中的前置通知被正确发现并织入。
+        $this->assertSame(['trait-before'], $aspect->trace);
+    }
+
+    public function testFaadeSetCacheDoesNotBreakWeaving(): void
+    {
+        // kode/attributes 2.x 的共享缓存能力：注入内存缓存后织入仍正常。
+        Aop::setCache(new \Kode\Attributes\ArrayCache());
+
+        $aspect = new OrderAspect();
+        Aop::boot([$aspect]);
+
+        $proxy = Aop::proxy(IntService::class);
+        $this->assertInstanceOf(IntService::class, $proxy);
+        $this->assertSame(10, $proxy->run(5));
+        $this->assertSame(['before', 'around-in', 'around-out', 'after'], $aspect->log);
     }
 }

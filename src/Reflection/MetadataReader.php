@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Kode\Aop\Reflection;
 
 use Kode\Attributes\Attr;
-use Kode\Attributes\Reader;
+use Kode\Attributes\CacheInterface;
 use Kode\Attributes\Meta;
 use ReflectionClass;
 use ReflectionMethod;
@@ -22,8 +22,16 @@ use Kode\Aop\Attribute\Priority;
 /**
  * 元数据读取器
  *
- * 基于 kode/attributes 包实现的属性读取器，用于读取类、方法上的注解信息。
- * 提供高性能的缓存机制，避免重复的反射操作。
+ * 基于 kode/attributes 2.x 包实现的属性读取器，用于读取类、方法上的注解信息。
+ *
+ * 相对 1.x 的关键改进（均借助 kode/attributes 2.x 的新能力）：
+ * - 统一走 {@see Attr} 门面，支持直接以 ReflectionClass / ReflectionMethod 等
+ *   Reflector 实例作为目标（2.x 修复了 1.x 传入反射对象会被当作普通对象、
+ *   静默读取"反射类自身"属性的致命缺陷）。
+ * - 方法级属性读取开启 `inherited`（沿继承链合并），可正确发现定义在 trait 或
+ *   父类中的通知方法。
+ * - 支持注入共享缓存（{@see CacheInterface}，如 RedisCache / APCu），让多进程
+ *   复用反射元数据；支持严格模式，属性实例化失败时立即抛出而非静默跳过。
  *
  * 支持的注解类型：
  * - Aspect：类级别，标记切面类
@@ -39,16 +47,72 @@ use Kode\Aop\Attribute\Priority;
 class MetadataReader
 {
     /**
-     * 属性读取器实例
+     * 是否启用严格模式：属性实例化失败时抛出异常而非静默跳过。
      */
-    private static ?Reader $reader = null;
+    private static bool $strict = true;
 
     /**
-     * 获取属性读取器实例
+     * 可选的共享缓存实现（如 RedisCache / APCu），用于跨进程复用反射元数据。
      */
-    private static function getReader(): Reader
+    private static ?CacheInterface $cache = null;
+
+    /**
+     * 标记 Attr 门面配置是否已应用（严格模式 / 缓存只需要在首次读取时应用一次）。
+     */
+    private static bool $configured = false;
+
+    /**
+     * 将本读取器的配置应用到 kode/attributes 的全局 Attr 门面。
+     *
+     * 2.x 起 Attr 门面持有单例 Reader，严格模式与缓存均为全局生效，
+     * 因此只需在首次使用时应用一次即可；setStrict/setCache 会重新应用两者，
+     * 确保严格模式与缓存配置互不丢失。
+     */
+    private static function configure(): void
     {
-        return self::$reader ??= new Reader();
+        if (self::$configured) {
+            return;
+        }
+
+        self::applyConfig();
+        self::$configured = true;
+    }
+
+    /**
+     * 重新应用严格模式与缓存配置到 Attr 门面。
+     */
+    private static function applyConfig(): void
+    {
+        Attr::strict(self::$strict);
+
+        if (self::$cache !== null) {
+            Attr::setCache(self::$cache);
+        }
+    }
+
+    /**
+     * 设置严格模式（默认开启）。
+     *
+     * 开启后，任何无法实例化的通知属性会立即抛出异常，而不是被静默跳过，
+     * 便于在开发期尽早暴露问题。
+     */
+    public static function setStrict(bool $strict): void
+    {
+        self::$strict = $strict;
+        self::applyConfig();
+        self::$configured = true;
+    }
+
+    /**
+     * 注入共享缓存实现（如 RedisCache 用于多 worker 共享元数据）。
+     *
+     * @param CacheInterface $cache 缓存实现
+     */
+    public static function setCache(CacheInterface $cache): void
+    {
+        self::$cache = $cache;
+        self::applyConfig();
+        self::$configured = true;
     }
 
     /**
@@ -68,7 +132,10 @@ class MetadataReader
      */
     public static function getAspect(ReflectionClass $class): ?Aspect
     {
-        $meta = Attr::get($class->getName(), Aspect::class);
+        self::configure();
+
+        // 2.x：直接以 ReflectionClass 作为目标，正确读取类级属性（1.x 会静默失效）。
+        $meta = Attr::get($class, Aspect::class);
 
         /** @var Aspect|null $aspect */
         $aspect = $meta?->getInstance();
@@ -193,11 +260,12 @@ class MetadataReader
      */
     public static function getPriority(ReflectionMethod $method): ?Priority
     {
+        self::configure();
+
         $className = $method->getDeclaringClass()->getName();
         $methodName = $method->getName();
 
-        $metaList = self::getReader()->getMethodAttrs($className, $methodName);
-        $meta = $metaList->get(Priority::class);
+        $meta = Attr::ofMethod($className, $methodName, inherited: false)->get(Priority::class);
 
         /** @var Priority|null $priority */
         $priority = $meta?->getInstance();
@@ -215,16 +283,21 @@ class MetadataReader
      */
     private static function getMethodAttributes(ReflectionMethod $method, string $attributeClass): array
     {
+        self::configure();
+
         $className = $method->getDeclaringClass()->getName();
         $methodName = $method->getName();
 
-        $metaList = self::getReader()->getMethodAttrs($className, $methodName);
-        $filteredList = $metaList->filter(fn(Meta $meta) => $meta->name === $attributeClass);
+        // 2.x：方法级属性读取统一走 Attr::ofMethod（替代 1.x 的私有 Reader）。
+        // 此处使用 inherited:false（即仅读取该方法自身声明的属性）：对从 trait /
+        // 父类继承来的方法，ReflectionMethod::getAttributes() 已包含其属性，
+        // 而 inherited:true 反而会把 trait 方法的同一属性重复计入。
+        $metas = Attr::ofMethod($className, $methodName, inherited: false)->getAll($attributeClass);
 
         /** @var array<int, T> $attributes */
         $attributes = array_map(
-            static fn(Meta $meta) => $meta->getInstance(),
-            $filteredList->all()
+            static fn(Meta $meta): object => $meta->getInstance(),
+            $metas->all()
         );
 
         return $attributes;
@@ -237,8 +310,8 @@ class MetadataReader
      */
     public static function clearCache(): void
     {
-        self::$reader = null;
         Attr::clear();
+        self::$configured = false;
     }
 
     /**
@@ -251,7 +324,10 @@ class MetadataReader
     public static function getCacheStats(): array
     {
         return [
-            'note' => '缓存由 kode/attributes 包管理',
+            'strict' => self::$strict,
+            'cache' => self::$cache === null ? null : get_debug_type(self::$cache),
+            'configured' => self::$configured,
+            'note' => '属性元数据缓存由 kode/attributes 2.x 管理',
         ];
     }
 
@@ -263,6 +339,8 @@ class MetadataReader
      */
     public static function isAspectClass(string $className): bool
     {
+        self::configure();
+
         return Attr::has($className, Aspect::class);
     }
 

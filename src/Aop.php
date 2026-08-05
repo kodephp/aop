@@ -6,7 +6,9 @@ namespace Kode\Aop;
 
 use Kode\Aop\Advice\AdviceSet;
 use Kode\Aop\Exception\AopException;
+use Kode\Aop\Reflection\MetadataReader;
 use Kode\Aop\Runtime\AspectKernel;
+use Kode\Attributes\CacheInterface;
 
 /**
  * AOP 门面
@@ -133,6 +135,37 @@ final class Aop
     public static function diagnostics(): array
     {
         return self::kernel()->diagnostics();
+    }
+
+    /**
+     * 注入共享属性缓存（kode/attributes 2.x 能力）
+     *
+     * 适用于多进程 / 分布式场景：注入实现了 {@see CacheInterface} 的驱动
+     * （如 RedisCache、APCu），让所有 worker、所有节点共享反射元数据，
+     * 避免重复反射。未注入时使用包内置的内存缓存。
+     *
+     * ```php
+     * Aop::setCache(new \Kode\Attributes\Cache\RedisCache($redis));
+     * ```
+     *
+     * @param CacheInterface $cache 缓存实现
+     */
+    public static function setCache(CacheInterface $cache): void
+    {
+        MetadataReader::setCache($cache);
+    }
+
+    /**
+     * 设置属性严格模式（kode/attributes 2.x 能力，默认开启）
+     *
+     * 开启后，任何无法实例化的通知属性会立即抛出异常，而不是被静默跳过，
+     * 便于在开发期尽早暴露问题。传入 false 可回退为宽容模式。
+     *
+     * @param bool $on 是否开启严格模式
+     */
+    public static function strict(bool $on = true): void
+    {
+        MetadataReader::setStrict($on);
     }
 
     /**

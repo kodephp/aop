@@ -10,6 +10,8 @@
 - **原生支持**：基于 PHP 8.3+ 原生属性（Attribute）实现，IDE 友好
 - **轻量级**：仅依赖 `kode/attributes` 包，无其他框架依赖
 - **门面 API**：一行代码完成「注册切面 + 初始化 + 取代理」（`Aop::boot()` / `Aop::proxy()` / `Aop::wrap()`）
+- **共享属性缓存**：基于 `kode/attributes` 2.x，可注入共享缓存（如 `RedisCache` / APCu）让多进程复用反射元数据，`Aop::setCache()` 一行接入
+- **严格模式**：通知属性实例化失败立即抛错（不再静默跳过），`Aop::strict()` 可切换
 - **五种通知**：前置（Before）、后置（After）、环绕（Around）、返回后（AfterReturning）、异常（AfterThrowing）
 - **洋葱式 Around 链**：支持同一方法上多个 Around 通知正确嵌套（修复 v2 仅优先级最高者生效的问题）
 - **丰富切入点**：`execution` / `within` / `@annotation` / `@within` / `@target` / `method`，支持 `&&` `||` `!` 逻辑运算、`类名+` 子类型、参数类型签名
@@ -101,6 +103,12 @@ Aop::bootFromConfig(require __DIR__ . '/config/aop.php');
 
 // 把已有实例包装为代理（适合 DI 容器场景）
 $proxied = Aop::wrap($alreadyCreatedService);
+
+// 注入共享属性缓存（kode/attributes 2.x）：多 worker / 多节点复用反射元数据
+Aop::setCache(new \Kode\Attributes\Cache\RedisCache($redis));
+
+// 严格模式默认开启；若需回退为宽容模式（属性实例化失败静默跳过）可关闭
+Aop::strict(false);
 ```
 
 门面还提供 `Aop::advicesFor()`（调试命中通知）、`Aop::diagnostics()`（运行期诊断）、`Aop::reset()`（测试隔离）等方法。
@@ -417,7 +425,7 @@ composer analyse
 
 - PHP >= 8.3
 - Composer >= 2.0
-- kode/attributes ^1.0
+- kode/attributes ^2.1
 
 ## 📄 许可证
 

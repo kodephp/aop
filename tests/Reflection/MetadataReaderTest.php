@@ -11,6 +11,7 @@ use Kode\Aop\Attribute\Before;
 use Kode\Aop\Attribute\After;
 use Kode\Aop\Attribute\Around;
 use Kode\Aop\Attribute\Priority;
+use Kode\Attributes\ArrayCache;
 use ReflectionClass;
 use ReflectionMethod;
 
@@ -161,5 +162,42 @@ class MetadataReaderTest extends TestCase
 
         $this->assertSame(10, $methods['beforeMethod']['priority']);
         $this->assertSame(Priority::NORMAL, $methods['afterMethod']['priority']);
+    }
+
+    /**
+     * 测试 kode/attributes 2.x 的共享缓存能力：注入缓存后读取会写入缓存。
+     */
+    public function testSetCachePopulatesSharedCache(): void
+    {
+        $cache = new ArrayCache();
+        MetadataReader::setCache($cache);
+
+        MetadataReader::getAspect(new ReflectionClass(TestAspect::class));
+        MetadataReader::getBefores(new ReflectionMethod(TestAspect::class, 'beforeMethod'));
+
+        // 类级与方法级属性元数据应被写入共享缓存。
+        $this->assertGreaterThan(0, $cache->getSize());
+        $this->assertTrue($cache->has('class:' . TestAspect::class));
+    }
+
+    /**
+     * 测试反射对象作为目标时不会静默失效（kode/attributes 2.x 的修复）。
+     */
+    public function testReflectionTargetReadsClassAttributes(): void
+    {
+        $reflection = new ReflectionClass(TestAspect::class);
+        $aspect = MetadataReader::getAspect($reflection);
+
+        // 1.x 传入 ReflectionClass 会被当作普通对象、静默读取"反射类自身"属性而返回 null。
+        $this->assertInstanceOf(Aspect::class, $aspect);
+    }
+
+    /**
+     * 测试严格模式默认开启。
+     */
+    public function testStrictModeEnabledByDefault(): void
+    {
+        $stats = MetadataReader::getCacheStats();
+        $this->assertTrue($stats['strict']);
     }
 }
