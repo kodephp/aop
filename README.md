@@ -1,19 +1,23 @@
-# Kode/AOP - PHP 8.1+ 轻量级 AOP 框架
+# Kode/AOP - PHP 8.3+ 轻量级 AOP 框架
 
-[![PHP Version](https://img.shields.io/badge/PHP-%3E%3D8.1-8892BF)](https://php.net/)
+[![PHP Version](https://img.shields.io/badge/PHP-%3E%3D8.3-8892BF)](https://php.net/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green)](LICENSE)
 
-基于 PHP 8.1+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件。
+基于 PHP 8.3+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件。
 
 ## ✨ 特性
 
-- **原生支持**：基于 PHP 8.1+ 原生属性（Attribute）实现，IDE 友好
-- **轻量级**：依赖 `kode/attributes` 包，无其他框架依赖
-- **高性能**：使用缓存机制避免重复反射操作
-- **类型安全**：充分利用 PHP 8.1+ 的类型系统，支持 readonly 属性
-- **扩展性强**：支持前置通知（Before）、后置通知（After）、环绕通知（Around）
-- **优先级控制**：支持通过 `#[Priority]` 注解控制切面执行顺序
-- **切入点表达式**：支持通配符匹配，灵活定义切入点
+- **原生支持**：基于 PHP 8.3+ 原生属性（Attribute）实现，IDE 友好
+- **轻量级**：仅依赖 `kode/attributes` 包，无其他框架依赖
+- **门面 API**：一行代码完成「注册切面 + 初始化 + 取代理」（`Aop::boot()` / `Aop::proxy()` / `Aop::wrap()`）
+- **五种通知**：前置（Before）、后置（After）、环绕（Around）、返回后（AfterReturning）、异常（AfterThrowing）
+- **洋葱式 Around 链**：支持同一方法上多个 Around 通知正确嵌套（修复 v2 仅优先级最高者生效的问题）
+- **丰富切入点**：`execution` / `within` / `@annotation` / `@within` / `@target` / `method`，支持 `&&` `||` `!` 逻辑运算、`类名+` 子类型、参数类型签名
+- **命名空间代理**：生成的代理类与目标类处于同一命名空间，彻底修复 v2 的 `ParseError`
+- **构造函数保留**：代理类完全继承目标类构造函数，不会吞掉构造逻辑
+- **文件缓存**：代理类可落盘为真实 PHP 文件并被 OPcache 缓存，且按切面集合指纹隔离，避免脏缓存
+- **类型安全**：充分利用 PHP 8.3 的类型系统与 `#[\Override]` 属性
+- **优先级控制**：通过 `#[Priority]` 注解控制通知执行顺序（After 系列遵循「先进后出」栈语义）
 
 ## 📦 安装
 
@@ -78,6 +82,29 @@ $result = $userService->createUser([
 ]);
 ```
 
+### Aop 门面（推荐用法）
+
+`Kode\Aop\Aop` 是对内核单例的静态封装，一行即可完成「注册切面 + 初始化 + 取代理」：
+
+```php
+use Kode\Aop\Aop;
+
+// 方式一：直接传切面实例/类名
+Aop::boot([LoggingAspect::class, TransactionAspect::class], __DIR__ . '/runtime/aop');
+
+/** @var UserService $userService */
+$userService = Aop::proxy(UserService::class);
+$userService->getUser(1);
+
+// 方式二：吃配置数组（结构见 config/aop.php）
+Aop::bootFromConfig(require __DIR__ . '/config/aop.php');
+
+// 把已有实例包装为代理（适合 DI 容器场景）
+$proxied = Aop::wrap($alreadyCreatedService);
+```
+
+门面还提供 `Aop::advicesFor()`（调试命中通知）、`Aop::diagnostics()`（运行期诊断）、`Aop::reset()`（测试隔离）等方法。
+
 ## 📖 详细文档
 
 ### 通知类型
@@ -137,6 +164,33 @@ public function transactional(ProceedingJoinPoint $joinPoint): mixed
 }
 ```
 
+#### AfterReturning（返回后通知）
+
+仅在目标方法**正常返回**后执行，可读取甚至替换返回值；与 `#[After]` 的区别是它不在异常时执行。
+
+```php
+#[AfterReturning("execution(* App\Service\UserService->getUser(..))")]
+public function cacheResult(JoinPointInterface $joinPoint): mixed
+{
+    $value = $joinPoint->getResult();
+    // 写缓存……
+    return $value; // 返回非 null 会覆盖原返回值；返回 null 保持原值
+}
+```
+
+#### AfterThrowing（异常通知）
+
+仅在目标方法**抛出异常**时执行，适用于异常上报、告警、审计。可通过 `$throwable` 限定只捕获特定异常类型；执行完毕后异常继续向上抛出（不吞异常）。
+
+```php
+#[AfterThrowing("execution(* App\Service\*->*(..))", throwable: \RuntimeException::class)]
+public function report(JoinPointInterface $joinPoint): void
+{
+    $e = $joinPoint->getException();
+    error_log($e?->getMessage() ?? '');
+}
+```
+
 ### 优先级控制
 
 使用 `#[Priority]` 注解控制切面执行顺序，数字越小优先级越高。
@@ -167,13 +221,36 @@ class PriorityAspect
 
 | 表达式 | 说明 | 示例 |
 |--------|------|------|
+| `execution(<修饰符> <返回> <类>-><方法>(<参数>))` | 按方法签名匹配 | `execution(public * App\Service\UserService->createUser(..))` |
 | `execution(* Class->method(..))` | 执行方法 | `execution(* UserService->createUser(..))` |
 | `execution(* Class->*(..))` | 类的所有方法 | `execution(* UserService->*(..))` |
 | `execution(* Namespace\*->*(..))` | 命名空间下所有类的所有方法 | `execution(* App\Service\*->*(..))` |
 | `within(Namespace\*)` | 命名空间下所有类 | `within(App\Controller\*)` |
+| `within(Class+)` | 类及其子类 / 实现类 | `within(App\Service\BaseService+)` |
+| `@annotation(Ann)` | 目标方法带有指定注解 | `@annotation(App\Attr\NoLog)` |
+| `@within(Ann)` / `@target(Ann)` | 目标类带有指定注解 | `@within(App\Attr\Logged)` |
+| `method(name)` | 仅按方法名匹配 | `method(createUser)` |
+| `namedPointcut()` | 引用 `#[Pointcut]` 命名的切点 | `logAll()` |
+
+`execution` 还支持：
+
+- **修饰符**：`public` / `protected` / `private` / `static` / `final`
+- **参数签名**：`(..)` 任意参数、`()` 无参、`(int, string)` 精确类型、`(int, ..)` 前缀类型匹配
+- **逻辑运算**：`&&`（与）、`||`（或）、`!`（非）、`()`（分组），关键字 `and` / `or` 等同
+- **子类型**：类模式后缀 `+` 表示包含子类与实现类
+
+示例：
+
+```php
+// 匹配某命名空间下所有 save* 方法，但排除带 @NoLog 注解的方法
+execution(* App\Service\*->save*(..)) && !@annotation(App\Attr\NoLog)
+
+// 匹配基类及其全部子类的任意方法
+within(App\Service\BaseService+)
+```
 
 通配符说明：
-- `*`：匹配任意数量的任意字符
+- `*`：匹配任意数量的任意字符（类 / 方法名中均可使用）
 - `..`：匹配任意参数列表
 - `?`：匹配单个任意字符
 
@@ -209,23 +286,42 @@ $closure = $joinPoint->getProceedClosure();         // 获取执行闭包
 
 ```
 src/
+├── Aop.php                  # 门面：一行完成注册/初始化/取代理
 ├── Attribute/               # 原生注解定义
 │   ├── Aspect.php           # 切面标记
 │   ├── Before.php           # 方法前执行
 │   ├── After.php            # 方法后执行（无论异常）
 │   ├── Around.php           # 环绕执行（可控制流程）
-│   ├── Pointcut.php         # 切入点表达式
+│   ├── AfterReturning.php   # 返回后执行（可替换返回值）
+│   ├── AfterThrowing.php    # 异常时执行（按异常类型过滤）
+│   ├── Pointcut.php         # 命名切点
 │   └── Priority.php         # 执行优先级
+│
+├── Pointcut/                # 切入点表达式
+│   ├── PointcutParser.php   # 递归下降解析器（编译为匹配闭包）
+│   └── MatchContext.php     # 匹配上下文（惰性反射）
+│
+├── Advice/                  # 通知编排
+│   ├── Advice.php           # 单条通知值对象
+│   ├── AdviceSet.php        # 某方法命中的通知集合
+│   ├── AdviceRegistry.php   # 注册表 + 匹配结果缓存
+│   ├── AdviceExecutor.php   # Before/Around/After... 时序编排
+│   └── AdviceType.php       # 通知类型枚举
+│
+├── Proxy/                   # 代理生成
+│   ├── ProxyGenerator.php   # 代理类源码生成器
+│   └── ProxyFactory.php     # 命名/生成/缓存/实例化
 │
 ├── Contract/                # 接口契约
 │   ├── AspectInterface.php
+│   ├── ProxyInterface.php   # 代理对象标记
 │   ├── JoinPointInterface.php
 │   ├── ProceedingJoinPointInterface.php
 │   └── AspectKernelInterface.php
 │
 ├── Runtime/                 # 运行时核心
 │   ├── JoinPoint.php        # 封装调用上下文
-│   ├── ProceedingJoinPoint.php # Around 场景专用
+│   ├── ProceedingJoinPoint.php # Around 场景专用（洋葱链）
 │   └── AspectKernel.php     # 核心调度器
 │
 ├── Reflection/              # 安全反射封装
@@ -319,7 +415,7 @@ composer analyse
 
 ## 📋 系统要求
 
-- PHP >= 8.1
+- PHP >= 8.3
 - Composer >= 2.0
 - kode/attributes ^1.0
 

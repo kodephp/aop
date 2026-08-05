@@ -9,9 +9,12 @@ use Kode\Attributes\Reader;
 use Kode\Attributes\Meta;
 use ReflectionClass;
 use ReflectionMethod;
+use Kode\Aop\Reflection\Reflector;
 use Kode\Aop\Attribute\Aspect;
 use Kode\Aop\Attribute\Before;
 use Kode\Aop\Attribute\After;
+use Kode\Aop\Attribute\AfterReturning;
+use Kode\Aop\Attribute\AfterThrowing;
 use Kode\Aop\Attribute\Around;
 use Kode\Aop\Attribute\Pointcut;
 use Kode\Aop\Attribute\Priority;
@@ -66,7 +69,11 @@ class MetadataReader
     public static function getAspect(ReflectionClass $class): ?Aspect
     {
         $meta = Attr::get($class->getName(), Aspect::class);
-        return $meta?->getInstance();
+
+        /** @var Aspect|null $aspect */
+        $aspect = $meta?->getInstance();
+
+        return $aspect;
     }
 
     /**
@@ -130,6 +137,28 @@ class MetadataReader
     }
 
     /**
+     * 获取方法上的返回后通知注解
+     *
+     * @param ReflectionMethod $method 方法反射对象
+     * @return array<int, AfterReturning> 返回后通知注解数组
+     */
+    public static function getAfterReturnings(ReflectionMethod $method): array
+    {
+        return self::getMethodAttributes($method, AfterReturning::class);
+    }
+
+    /**
+     * 获取方法上的异常通知注解
+     *
+     * @param ReflectionMethod $method 方法反射对象
+     * @return array<int, AfterThrowing> 异常通知注解数组
+     */
+    public static function getAfterThrowings(ReflectionMethod $method): array
+    {
+        return self::getMethodAttributes($method, AfterThrowing::class);
+    }
+
+    /**
      * 获取方法上的切入点注解
      *
      * @param ReflectionMethod $method 方法反射对象
@@ -170,7 +199,10 @@ class MetadataReader
         $metaList = self::getReader()->getMethodAttrs($className, $methodName);
         $meta = $metaList->get(Priority::class);
 
-        return $meta?->getInstance();
+        /** @var Priority|null $priority */
+        $priority = $meta?->getInstance();
+
+        return $priority;
     }
 
     /**
@@ -189,10 +221,13 @@ class MetadataReader
         $metaList = self::getReader()->getMethodAttrs($className, $methodName);
         $filteredList = $metaList->filter(fn(Meta $meta) => $meta->name === $attributeClass);
 
-        return array_map(
+        /** @var array<int, T> $attributes */
+        $attributes = array_map(
             static fn(Meta $meta) => $meta->getInstance(),
             $filteredList->all()
         );
+
+        return $attributes;
     }
 
     /**
@@ -235,33 +270,67 @@ class MetadataReader
      * 获取切面类的所有通知方法
      *
      * @param string $className 切面类名
-     * @return array<string, array{befores: array, afters: array, arounds: array, priority: int}> 方法元数据
+     * @return array<string, array{
+     *     befores: array<int, Before>,
+     *     afters: array<int, After>,
+     *     arounds: array<int, Around>,
+     *     afterReturnings: array<int, AfterReturning>,
+     *     afterThrowings: array<int, AfterThrowing>,
+     *     priority: int
+     * }> 方法元数据
      */
     public static function getAspectMethods(string $className): array
     {
-        $reflection = new ReflectionClass($className);
+        $reflection = Reflector::getClass($className);
         $methods = [];
 
         foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-            if ($method->isConstructor() || $method->isDestructor()) {
+            if ($method->isConstructor() || $method->isDestructor() || $method->isStatic()) {
                 continue;
             }
 
             $befores = self::getBefores($method);
             $afters = self::getAfters($method);
             $arounds = self::getArounds($method);
+            $afterReturnings = self::getAfterReturnings($method);
+            $afterThrowings = self::getAfterThrowings($method);
 
-            if ($befores || $afters || $arounds) {
+            if ($befores || $afters || $arounds || $afterReturnings || $afterThrowings) {
                 $priority = self::getPriority($method);
                 $methods[$method->getName()] = [
                     'befores' => $befores,
                     'afters' => $afters,
                     'arounds' => $arounds,
-                    'priority' => $priority?->value ?? Priority::NORMAL,
+                    'afterReturnings' => $afterReturnings,
+                    'afterThrowings' => $afterThrowings,
+                    'priority' => $priority === null ? Priority::NORMAL : $priority->value,
                 ];
             }
         }
 
         return $methods;
+    }
+
+    /**
+     * 获取切面类中通过 #[Pointcut] 定义的命名切点
+     *
+     * 方法名即切点名，注解的 expression 即其表达式，可在其他通知中以
+     * `切点名()` 的形式引用。
+     *
+     * @param string $className 切面类名
+     * @return array<string, string> 切点名 => 表达式
+     */
+    public static function getPointcutDefinitions(string $className): array
+    {
+        $reflection = Reflector::getClass($className);
+        $definitions = [];
+
+        foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            foreach (self::getPointcuts($method) as $pointcut) {
+                $definitions[$method->getName()] = $pointcut->expression;
+            }
+        }
+
+        return $definitions;
     }
 }

@@ -4,18 +4,20 @@ declare(strict_types=1);
 
 namespace Kode\Aop\Runtime;
 
+use Kode\Aop\Contract\JoinPointInterface;
 use ReflectionClass;
 use ReflectionMethod;
-use Kode\Aop\Contract\JoinPointInterface;
+use Throwable;
 
 /**
  * 连接点实现类
  *
- * 封装了方法调用的完整上下文信息，包括目标类、目标方法、
- * 目标对象实例、方法参数和切入点表达式。
+ * 封装了方法调用的完整上下文信息：目标类、目标方法、目标对象、
+ * 调用参数、返回值与异常。
  *
- * 连接点是 AOP 框架中的核心概念，代表程序执行过程中的某个特定点。
- * 在本框架中，连接点主要指方法的调用点。
+ * 与 v2 不同，v3 在一次方法调用中只创建**一个**连接点实例并共享给
+ * 所有通知，因此 Before 通知调用 {@see setArguments()} 修改的参数
+ * 会真正作用于目标方法，AfterReturning 也能读到真实返回值。
  *
  * @package Kode\Aop\Runtime
  * @author Kode Team <382601296@qq.com>
@@ -24,14 +26,22 @@ use Kode\Aop\Contract\JoinPointInterface;
 class JoinPoint implements JoinPointInterface
 {
     /**
-     * 构造函数
-     *
+     * 目标方法返回值
+     */
+    protected mixed $result = null;
+
+    /**
+     * 目标方法抛出的异常
+     */
+    protected ?Throwable $exception = null;
+
+    /**
      * @param ReflectionClass $class 目标类的反射对象
      * @param ReflectionMethod $method 目标方法的反射对象
      * @param object $object 目标对象实例
-     * @param array $arguments 方法参数数组
+     * @param array<int|string, mixed> $arguments 方法参数数组
      * @param string $pointcut 切入点表达式
-     * @param mixed $result 方法返回值（用于 After 通知）
+     * @param mixed $result 方法返回值（用于 After 系列通知）
      */
     public function __construct(
         protected readonly ReflectionClass $class,
@@ -39,13 +49,15 @@ class JoinPoint implements JoinPointInterface
         protected readonly object $object,
         protected array $arguments,
         protected readonly string $pointcut = '',
-        protected readonly mixed $result = null
+        mixed $result = null
     ) {
+        $this->result = $result;
     }
 
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function getClass(): ReflectionClass
     {
         return $this->class;
@@ -54,6 +66,7 @@ class JoinPoint implements JoinPointInterface
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function getMethod(): ReflectionMethod
     {
         return $this->method;
@@ -62,6 +75,7 @@ class JoinPoint implements JoinPointInterface
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function getThis(): object
     {
         return $this->object;
@@ -70,6 +84,7 @@ class JoinPoint implements JoinPointInterface
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function getArguments(): array
     {
         return $this->arguments;
@@ -78,6 +93,7 @@ class JoinPoint implements JoinPointInterface
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function setArguments(array $args): void
     {
         $this->arguments = $args;
@@ -86,58 +102,145 @@ class JoinPoint implements JoinPointInterface
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function getPointcut(): string
     {
         return $this->pointcut;
     }
 
     /**
-     * 获取方法返回值
-     *
-     * 仅在 After 通知中有效，用于获取方法的返回值。
-     *
-     * @return mixed 方法返回值
+     * {@inheritDoc}
      */
+    #[\Override]
     public function getResult(): mixed
     {
         return $this->result;
     }
 
     /**
-     * 获取方法名
+     * 设置目标方法返回值
      *
-     * 便捷方法，直接返回目标方法的名称。
-     *
-     * @return string 方法名
+     * 在 AfterReturning 通知中调用可替换最终返回给调用方的结果。
      */
+    public function setResult(mixed $result): void
+    {
+        $this->result = $result;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    #[\Override]
+    public function getException(): ?Throwable
+    {
+        return $this->exception;
+    }
+
+    /**
+     * 记录目标方法抛出的异常
+     *
+     * @internal 由内核调用
+     */
+    public function setException(?Throwable $exception): void
+    {
+        $this->exception = $exception;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    #[\Override]
     public function getMethodName(): string
     {
         return $this->method->getName();
     }
 
     /**
-     * 获取类名
-     *
-     * 便捷方法，直接返回目标类的完整名称。
-     *
-     * @return string 类名
+     * {@inheritDoc}
      */
+    #[\Override]
     public function getClassName(): string
     {
         return $this->class->getName();
     }
 
     /**
-     * 获取指定位置的参数
+     * 获取指定位置或名称的参数
      *
-     * 便捷方法，用于获取指定位置的参数值。
-     *
-     * @param int $index 参数位置索引（从0开始）
-     * @param mixed $default 默认值
-     * @return mixed 参数值或默认值
+     * @param int|string $key 参数下标或参数名
+     * @param mixed $default 取不到时的默认值
      */
-    public function getArgument(int $index, mixed $default = null): mixed
+    public function getArgument(int|string $key, mixed $default = null): mixed
     {
-        return $this->arguments[$index] ?? $default;
+        if (is_int($key)) {
+            return $this->arguments[$key] ?? $default;
+        }
+
+        $index = $this->indexOfParameter($key);
+
+        return $index === null ? $default : ($this->arguments[$index] ?? $default);
+    }
+
+    /**
+     * 按位置或名称设置参数
+     *
+     * @param int|string $key 参数下标或参数名
+     * @param mixed $value 参数值
+     */
+    public function setArgument(int|string $key, mixed $value): void
+    {
+        if (is_int($key)) {
+            $this->arguments[$key] = $value;
+
+            return;
+        }
+
+        $index = $this->indexOfParameter($key);
+
+        if ($index !== null) {
+            $this->arguments[$index] = $value;
+        }
+    }
+
+    /**
+     * 以「参数名 => 值」形式返回全部参数
+     *
+     * @return array<string, mixed>
+     */
+    public function getNamedArguments(): array
+    {
+        $named = [];
+
+        foreach ($this->method->getParameters() as $parameter) {
+            $position = $parameter->getPosition();
+
+            if (array_key_exists($position, $this->arguments)) {
+                $named[$parameter->getName()] = $this->arguments[$position];
+            }
+        }
+
+        return $named;
+    }
+
+    /**
+     * 获取形如 `App\Service\UserService::createUser` 的签名
+     */
+    public function getSignature(): string
+    {
+        return $this->getClassName() . '::' . $this->getMethodName();
+    }
+
+    /**
+     * 查找参数名对应的位置
+     */
+    private function indexOfParameter(string $name): ?int
+    {
+        foreach ($this->method->getParameters() as $parameter) {
+            if ($parameter->getName() === $name) {
+                return $parameter->getPosition();
+            }
+        }
+
+        return null;
     }
 }

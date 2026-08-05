@@ -63,6 +63,7 @@ interface AspectKernelInterface
      * - 每次调用都会创建新的代理对象实例
      *
      * @param string $className 原始类名
+     * @param array<int|string, mixed> $constructorArgs 传给目标类构造函数的参数
      * @return object 代理对象实例
      *
      * @throws \Kode\Aop\Exception\AopException 如果类不存在或无法创建代理
@@ -71,9 +72,27 @@ interface AspectKernelInterface
      * ```php
      * $userService = $kernel->getProxy(UserService::class);
      * $result = $userService->createUser(['name' => 'John']);
+     *
+     * // 目标类构造函数需要参数时
+     * $repo = $kernel->getProxy(UserRepository::class, [$pdo, 'users']);
      * ```
      */
-    public function getProxy(string $className): object;
+    public function getProxy(string $className, array $constructorArgs = []): object;
+
+    /**
+     * 执行织入逻辑
+     *
+     * 由动态生成的代理类回调，业务代码通常无需直接调用。
+     *
+     * @param object $target 代理实例
+     * @param string $method 目标方法名
+     * @param array<int|string, mixed> $arguments 调用参数
+     * @param \Closure $invoker 执行原方法的闭包
+     * @return mixed 目标方法（可能被通知改写后）的返回值
+     *
+     * @internal
+     */
+    public function invokeAdvice(object $target, string $method, array $arguments, \Closure $invoker): mixed;
 
     /**
      * 初始化内核

@@ -23,7 +23,7 @@ class Reflector
     /**
      * 获取类的反射对象
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @return ReflectionClass 类反射对象
      * @throws AopException 如果类不存在或无法反射
      *
@@ -52,7 +52,7 @@ class Reflector
     /**
      * 获取方法的反射对象
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @param string $method 方法名
      * @return ReflectionMethod 方法反射对象
      * @throws AopException 如果方法不存在或无法反射
@@ -66,6 +66,7 @@ class Reflector
     public static function getMethod(object|string $class, string $method): ReflectionMethod
     {
         try {
+            // phpstan-ignore-next-line new ReflectionMethod accepts a class-string|object at runtime; $class is object|string by design
             return new ReflectionMethod($class, $method);
         } catch (\ReflectionException $e) {
             throw new AopException(
@@ -79,7 +80,7 @@ class Reflector
     /**
      * 获取属性的反射对象
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @param string $property 属性名
      * @return ReflectionProperty 属性反射对象
      * @throws AopException 如果属性不存在或无法反射
@@ -117,7 +118,7 @@ class Reflector
     /**
      * 检查方法是否存在
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @param string $method 方法名
      * @return bool 方法是否存在
      */
@@ -129,7 +130,7 @@ class Reflector
     /**
      * 检查属性是否存在
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @param string $property 属性名
      * @return bool 属性是否存在
      */
@@ -141,7 +142,7 @@ class Reflector
     /**
      * 获取类的所有公共方法
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @return array<int, ReflectionMethod> 方法反射对象数组
      * @throws AopException 如果类不存在
      */
@@ -153,7 +154,7 @@ class Reflector
     /**
      * 获取类的短名称（不含命名空间）
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @return string 类的短名称
      * @throws AopException 如果类不存在
      */
@@ -165,7 +166,7 @@ class Reflector
     /**
      * 获取类的命名空间
      *
-     * @param object|class-string $class 类名或对象实例
+     * @param object|string $class 类名或对象实例
      * @return string 命名空间
      * @throws AopException 如果类不存在
      */

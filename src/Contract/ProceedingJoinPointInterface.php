@@ -34,7 +34,7 @@ interface ProceedingJoinPointInterface extends JoinPointInterface
      * - 可以多次调用此方法（例如实现重试逻辑）
      * - 应该返回原方法的返回值（或修改后的值）
      *
-     * @param array $arguments 可选的方法参数，如果为空则使用原始参数
+     * @param array<int|string, mixed> $arguments 可选的方法参数，如果为空则使用原始参数
      * @return mixed 原方法的返回值
      *
      * @example

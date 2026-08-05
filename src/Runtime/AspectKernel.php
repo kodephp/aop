@@ -5,30 +5,37 @@ declare(strict_types=1);
 namespace Kode\Aop\Runtime;
 
 use Closure;
-use ReflectionClass;
-use ReflectionMethod;
-use ReflectionNamedType;
-use ReflectionUnionType;
-use Kode\Aop\Contract\AspectInterface;
+use Kode\Aop\Advice\AdviceExecutor;
+use Kode\Aop\Advice\AdviceRegistry;
+use Kode\Aop\Advice\AdviceSet;
 use Kode\Aop\Contract\AspectKernelInterface;
+use Kode\Aop\Contract\ProxyInterface;
+use Kode\Aop\Exception\AopException;
+use Kode\Aop\Pointcut\MatchContext;
+use Kode\Aop\Pointcut\PointcutParser;
+use Kode\Aop\Proxy\ProxyFactory;
 use Kode\Aop\Reflection\MetadataReader;
 use Kode\Aop\Reflection\Reflector;
-use Kode\Aop\Exception\AopException;
-use Kode\Aop\Helper\Str;
+use ReflectionClass;
+use ReflectionMethod;
 
 /**
- * AOP 内核实现类
+ * AOP 内核
  *
- * 核心调度器，负责：
- * - 注册和管理切面
- * - 解析切入点表达式
- * - 生成代理对象
- * - 协调通知的执行顺序
+ * 框架的中枢，把三个职责清晰的组件粘合起来：
+ * - {@see AdviceRegistry}：切面登记、切入点编译、匹配结果缓存
+ * - {@see ProxyFactory}：代理类生成、命名与缓存
+ * - {@see AdviceExecutor}：运行期通知编排
  *
- * 支持的通知类型：
- * - Before：方法执行前
- * - After：方法执行后（无论是否异常）
- * - Around：环绕方法执行
+ * 典型用法：
+ * ```php
+ * $kernel = AspectKernel::getInstance();
+ * $kernel->registerAspect(new LoggingAspect());
+ * $kernel->setCacheDir(__DIR__ . '/runtime/aop');   // 可选：文件缓存
+ *
+ * $service = $kernel->getProxy(UserService::class);
+ * $service->getUser(1);
+ * ```
  *
  * @package Kode\Aop\Runtime
  * @author Kode Team <382601296@qq.com>
@@ -37,11 +44,38 @@ use Kode\Aop\Helper\Str;
 class AspectKernel implements AspectKernelInterface
 {
     /**
-     * 已注册的切面对象列表
-     *
-     * @var array<int, object>
+     * 单例实例
      */
-    protected array $aspects = [];
+    protected static ?AspectKernel $instance = null;
+
+    /**
+     * 通知注册表
+     */
+    protected AdviceRegistry $registry;
+
+    /**
+     * 代理工厂
+     */
+    protected ProxyFactory $factory;
+
+    /**
+     * 通知执行器
+     */
+    protected AdviceExecutor $executor;
+
+    /**
+     * 原始类反射缓存
+     *
+     * @var array<string, ReflectionClass>
+     */
+    protected array $classCache = [];
+
+    /**
+     * 目标方法反射缓存
+     *
+     * @var array<string, ReflectionMethod>
+     */
+    protected array $methodCache = [];
 
     /**
      * 是否已初始化
@@ -49,28 +83,22 @@ class AspectKernel implements AspectKernelInterface
     protected bool $initialized = false;
 
     /**
-     * 代理类缓存
-     *
-     * @var array<string, class-string>
+     * AOP 总开关，关闭后代理方法直接透传
      */
-    protected static array $proxyClassCache = [];
+    protected bool $enabled = true;
 
     /**
-     * 切面元数据缓存
-     *
-     * @var array<string, array>
+     * @param string|null $cacheDir 代理类文件缓存目录，null 表示使用 eval()
      */
-    protected static array $aspectMetadataCache = [];
+    public function __construct(?string $cacheDir = null)
+    {
+        $this->registry = new AdviceRegistry();
+        $this->factory = new ProxyFactory($this->registry, $cacheDir);
+        $this->executor = new AdviceExecutor();
+    }
 
     /**
-     * 单例实例
-     */
-    protected static ?AspectKernel $instance = null;
-
-    /**
-     * 获取 AspectKernel 单例实例
-     *
-     * @return AspectKernel 单例实例
+     * 获取单例实例
      */
     public static function getInstance(): AspectKernel
     {
@@ -82,639 +110,299 @@ class AspectKernel implements AspectKernelInterface
      */
     public static function resetInstance(): void
     {
+        self::$instance?->reset();
         self::$instance = null;
-        self::$proxyClassCache = [];
-        self::$aspectMetadataCache = [];
+        PointcutParser::clearCache();
+    }
+
+    /**
+     * 清空本内核的全部状态
+     */
+    public function reset(): void
+    {
+        $this->registry->reset();
+        $this->factory->reset();
+        $this->classCache = [];
+        $this->methodCache = [];
+        $this->initialized = false;
+        $this->enabled = true;
     }
 
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function registerAspect(object $aspect): void
     {
-        $this->validateAspect($aspect);
-        $this->aspects[] = $aspect;
-        $this->cacheAspectMetadata($aspect);
+        $this->registry->register($aspect);
+        $this->factory->reset();
     }
 
     /**
-     * 验证切面对象是否有效
+     * 批量注册切面
      *
-     * @param object $aspect 切面对象
-     * @throws AopException 如果切面无效
-     */
-    protected function validateAspect(object $aspect): void
-    {
-        if ($aspect instanceof AspectInterface) {
-            return;
-        }
-
-        if (!MetadataReader::isAspectClass($aspect::class)) {
-            throw new AopException(
-                sprintf(
-                    '切面类 %s 必须实现 AspectInterface 接口或使用 #[Aspect] 注解标记',
-                    $aspect::class
-                )
-            );
-        }
-    }
-
-    /**
-     * 缓存切面元数据
+     * 支持传入切面实例，或可无参实例化的切面类名。
      *
-     * @param object $aspect 切面对象
+     * @param array<int, object|class-string> $aspects
+     * @throws AopException 切面非法时抛出
      */
-    protected function cacheAspectMetadata(object $aspect): void
+    public function registerAspects(array $aspects): void
     {
-        $className = $aspect::class;
+        foreach ($aspects as $aspect) {
+            if (is_string($aspect)) {
+                if (!class_exists($aspect)) {
+                    throw AopException::classNotFound($aspect);
+                }
 
-        if (isset(self::$aspectMetadataCache[$className])) {
-            return;
+                $aspect = new $aspect();
+            }
+
+            $this->registerAspect($aspect);
         }
-
-        $reflection = Reflector::getClass($aspect);
-        $methods = MetadataReader::getAspectMethods($className);
-
-        self::$aspectMetadataCache[$className] = [
-            'class' => $reflection,
-            'methods' => $methods,
-        ];
     }
 
     /**
      * {@inheritDoc}
      */
-    public function getProxy(string $className): object
+    #[\Override]
+    public function getProxy(string $className, array $constructorArgs = []): object
     {
-        $proxyClassName = $this->getOrCreateProxyClass($className);
-        return new $proxyClassName();
+        return $this->factory->create($className, $this, $constructorArgs);
     }
 
     /**
-     * 获取或创建代理类
+     * 获取目标类对应的代理类名
      *
-     * @param string $className 原始类名
-     * @return string 代理类名
+     * 适合与 DI 容器集成：容器拿到类名后自行决定如何实例化。
+     *
+     * @param string $className 目标类名
+     * @return string|null 代理类名，null 表示该类无需代理
      */
-    protected function getOrCreateProxyClass(string $className): string
+    public function getProxyClass(string $className): ?string
     {
-        $cacheKey = $className;
+        return $this->factory->proxyClassFor($className, $this);
+    }
 
-        if (isset(self::$proxyClassCache[$cacheKey])) {
-            return self::$proxyClassCache[$cacheKey];
-        }
-
-        $proxyClassName = $className . '__AopProxy_' . hash('xxh128', $className);
-        $this->generateProxyClass($className, $proxyClassName);
-
-        return self::$proxyClassCache[$cacheKey] = $proxyClassName;
+    /**
+     * 把已存在的实例包装为代理对象
+     *
+     * @param object $instance 已构造好的实例
+     * @return object 代理实例；若该类无需代理则原样返回
+     */
+    public function wrap(object $instance): object
+    {
+        return $this->factory->wrap($instance, $this);
     }
 
     /**
      * {@inheritDoc}
      */
+    #[\Override]
     public function init(): void
     {
         if ($this->initialized) {
             return;
         }
 
-        MetadataReader::clearCache();
         $this->initialized = true;
     }
 
     /**
-     * 生成代理类
+     * 设置代理类文件缓存目录
      *
-     * @param string $className 原始类名
-     * @param string $proxyClassName 代理类名
-     * @throws AopException 如果无法生成代理类
+     * 落盘为真实 PHP 文件后可被 OPcache 缓存，生产环境建议开启。
+     *
+     * @param string|null $directory 目录路径，null 表示改用 eval()
      */
-    protected function generateProxyClass(string $className, string $proxyClassName): void
+    public function setCacheDir(?string $directory): self
     {
-        $reflection = Reflector::getClass($className);
-        $methods = $reflection->getMethods(ReflectionMethod::IS_PUBLIC);
+        $this->factory->setCacheDir($directory);
 
-        $proxyMethods = '';
-        foreach ($methods as $method) {
-            if ($this->shouldSkipMethod($method)) {
-                continue;
-            }
+        return $this;
+    }
 
-            $proxyMethods .= $this->generateProxyMethod($className, $method);
+    /**
+     * 获取代理类文件缓存目录
+     */
+    public function getCacheDir(): ?string
+    {
+        return $this->factory->getCacheDir();
+    }
+
+    /**
+     * 开启 AOP 织入
+     */
+    public function enable(): self
+    {
+        $this->enabled = true;
+
+        return $this;
+    }
+
+    /**
+     * 关闭 AOP 织入
+     *
+     * 关闭后已生成的代理对象会直接调用原方法，便于压测对比或临时排障。
+     */
+    public function disable(): self
+    {
+        $this->enabled = false;
+
+        return $this;
+    }
+
+    /**
+     * AOP 是否处于开启状态
+     */
+    public function isEnabled(): bool
+    {
+        return $this->enabled;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    #[\Override]
+    public function invokeAdvice(object $target, string $method, array $arguments, Closure $invoker): mixed
+    {
+        if (!$this->enabled) {
+            return $invoker(...$arguments);
         }
 
-        $proxyClassCode = $this->buildProxyClassCode($className, $proxyClassName, $proxyMethods);
+        $className = $target instanceof ProxyInterface ? $target::__aopTargetClass() : $target::class;
+        $set = $this->registry->resolve($className, $method);
 
-        eval($proxyClassCode);
-    }
+        if ($set->isEmpty()) {
+            return $invoker(...$arguments);
+        }
 
-    /**
-     * 判断是否应该跳过该方法
-     *
-     * @param ReflectionMethod $method 方法反射对象
-     * @return bool 是否跳过
-     */
-    protected function shouldSkipMethod(ReflectionMethod $method): bool
-    {
-        return $method->isConstructor()
-            || $method->isDestructor()
-            || str_starts_with($method->getName(), '__');
-    }
-
-    /**
-     * 生成代理方法代码
-     *
-     * @param string $className 原始类名
-     * @param ReflectionMethod $method 方法反射对象
-     * @return string 代理方法代码
-     */
-    protected function generateProxyMethod(string $className, ReflectionMethod $method): string
-    {
-        $methodName = $method->getName();
-        $parameters = $this->buildMethodParameters($method);
-        $parameterNames = $this->buildMethodParameterNames($method);
-        $returnType = $this->buildMethodReturnType($method);
-
-        $hasAround = $this->hasMatchingAdvice($className, $methodName, 'arounds');
-
-        return $hasAround
-            ? $this->buildAroundProxyMethod($className, $methodName, $parameters, $parameterNames, $returnType)
-            : $this->buildStandardProxyMethod($className, $methodName, $parameters, $parameterNames, $returnType);
-    }
-
-    /**
-     * 构建环绕通知代理方法
-     */
-    protected function buildAroundProxyMethod(
-        string $className,
-        string $methodName,
-        string $parameters,
-        string $parameterNames,
-        string $returnType
-    ): string {
-        return <<<PHP
-
-    public function {$methodName}({$parameters}){$returnType}
-    {
-        \$args = [{$parameterNames}];
-        \$closure = fn({$parameters}) => parent::{$methodName}({$parameterNames});
-
-        \$proceedingJoinPoint = new \Kode\Aop\Runtime\ProceedingJoinPoint(
-            new \ReflectionClass('{$className}'),
-            new \ReflectionMethod('{$className}', '{$methodName}'),
-            \$this,
-            \$args,
-            '',
-            \$closure
+        return $this->executor->execute(
+            $set,
+            $target,
+            $this->reflectClass($className),
+            $this->reflectMethod($className, $method),
+            array_values($arguments),
+            $invoker
         );
-
-        return \$this->executeAroundAdvices(\$proceedingJoinPoint);
-    }
-PHP;
     }
 
     /**
-     * 构建标准代理方法（Before + After）
+     * 解析目标方法上命中的通知集合
      */
-    protected function buildStandardProxyMethod(
-        string $className,
-        string $methodName,
-        string $parameters,
-        string $parameterNames,
-        string $returnType
-    ): string {
-        return <<<PHP
-
-    public function {$methodName}({$parameters}){$returnType}
+    public function resolveAdvices(string $className, string $methodName): AdviceSet
     {
-        \$args = [{$parameterNames}];
-        \$this->executeBeforeAdvices(\$this, new \ReflectionMethod('{$className}', '{$methodName}'), \$args);
-
-        try {
-            \$result = parent::{$methodName}({$parameterNames});
-        } finally {
-            \$this->executeAfterAdvices(\$this, new \ReflectionMethod('{$className}', '{$methodName}'), \$args, \$result);
-        }
-
-        return \$result;
-    }
-PHP;
+        return $this->registry->resolve($className, $methodName);
     }
 
     /**
-     * 构建代理类完整代码
-     */
-    protected function buildProxyClassCode(string $className, string $proxyClassName, string $proxyMethods): string
-    {
-        return <<<PHP
-class {$proxyClassName} extends {$className}
-{
-    private static ?\Kode\Aop\Runtime\AspectKernel \$aopKernel = null;
-
-    public function __construct()
-    {
-        self::\$aopKernel ??= \Kode\Aop\Runtime\AspectKernel::getInstance();
-    }
-
-    public function getAspects(): array
-    {
-        return self::\$aopKernel->getRegisteredAspects();
-    }
-
-    {$proxyMethods}
-
-    private function executeBeforeAdvices(object \$object, \ReflectionMethod \$method, array \$args): void
-    {
-        \$kernel = self::\$aopKernel;
-        \$className = \$object::class;
-        \$methodName = \$method->getName();
-
-        \$advices = [];
-        foreach (\$kernel->getRegisteredAspects() as \$aspect) {
-            \$metadata = \$kernel->getAspectMetadata(\$aspect);
-
-            foreach (\$metadata['methods'] as \$aspectMethodName => \$methodMeta) {
-                foreach (\$methodMeta['befores'] as \$before) {
-                    if (\$kernel->matchesPointcut(\$className, \$methodName, \$before->pointcut)) {
-                        \$advices[] = [
-                            'aspect' => \$aspect,
-                            'method' => \$aspectMethodName,
-                            'priority' => \$methodMeta['priority'],
-                        ];
-                    }
-                }
-            }
-        }
-
-        usort(\$advices, fn(\$a, \$b) => \$a['priority'] <=> \$b['priority']);
-
-        foreach (\$advices as \$advice) {
-            \$joinPoint = new \Kode\Aop\Runtime\JoinPoint(
-                new \ReflectionClass(\$className),
-                \$method,
-                \$object,
-                \$args,
-                ''
-            );
-            \$advice['aspect']->{\$advice['method']}(\$joinPoint);
-        }
-    }
-
-    private function executeAfterAdvices(object \$object, \ReflectionMethod \$method, array \$args, mixed \$result): void
-    {
-        \$kernel = self::\$aopKernel;
-        \$className = \$object::class;
-        \$methodName = \$method->getName();
-
-        \$advices = [];
-        foreach (\$kernel->getRegisteredAspects() as \$aspect) {
-            \$metadata = \$kernel->getAspectMetadata(\$aspect);
-
-            foreach (\$metadata['methods'] as \$aspectMethodName => \$methodMeta) {
-                foreach (\$methodMeta['afters'] as \$after) {
-                    if (\$kernel->matchesPointcut(\$className, \$methodName, \$after->pointcut)) {
-                        \$advices[] = [
-                            'aspect' => \$aspect,
-                            'method' => \$aspectMethodName,
-                            'priority' => \$methodMeta['priority'],
-                        ];
-                    }
-                }
-            }
-        }
-
-        usort(\$advices, fn(\$a, \$b) => \$b['priority'] <=> \$a['priority']);
-
-        foreach (\$advices as \$advice) {
-            \$joinPoint = new \Kode\Aop\Runtime\JoinPoint(
-                new \ReflectionClass(\$className),
-                \$method,
-                \$object,
-                \$args,
-                '',
-                \$result
-            );
-            \$advice['aspect']->{\$advice['method']}(\$joinPoint);
-        }
-    }
-
-    private function executeAroundAdvices(\Kode\Aop\Runtime\ProceedingJoinPoint \$proceedingJoinPoint): mixed
-    {
-        \$kernel = self::\$aopKernel;
-        \$object = \$proceedingJoinPoint->getThis();
-        \$method = \$proceedingJoinPoint->getMethod();
-        \$className = \$object::class;
-        \$methodName = \$method->getName();
-
-        \$advices = [];
-        foreach (\$kernel->getRegisteredAspects() as \$aspect) {
-            \$metadata = \$kernel->getAspectMetadata(\$aspect);
-
-            foreach (\$metadata['methods'] as \$aspectMethodName => \$methodMeta) {
-                foreach (\$methodMeta['arounds'] as \$around) {
-                    if (\$kernel->matchesPointcut(\$className, \$methodName, \$around->pointcut)) {
-                        \$advices[] = [
-                            'aspect' => \$aspect,
-                            'method' => \$aspectMethodName,
-                            'priority' => \$methodMeta['priority'],
-                        ];
-                    }
-                }
-            }
-        }
-
-        usort(\$advices, fn(\$a, \$b) => \$a['priority'] <=> \$b['priority']);
-
-        if (empty(\$advices)) {
-            return \$proceedingJoinPoint->proceed();
-        }
-
-        \$advice = \$advices[0];
-        return \$advice['aspect']->{\$advice['method']}(\$proceedingJoinPoint);
-    }
-
-    private function matchesPointcut(string \$className, string \$methodName, string \$pointcut): bool
-    {
-        return self::\$aopKernel->matchesPointcut(\$className, \$methodName, \$pointcut);
-    }
-}
-PHP;
-    }
-
-    /**
-     * 检查是否有匹配的通知
+     * 判断目标方法上是否存在指定类型的通知
      *
-     * @param string $className 类名
-     * @param string $methodName 方法名
-     * @param string $adviceType 通知类型 (befores|afters|arounds)
-     * @return bool 是否有匹配的通知
+     * @param string $adviceType 通知类型，兼容旧版的 befores/afters/arounds 写法
      */
     public function hasMatchingAdvice(string $className, string $methodName, string $adviceType): bool
     {
-        foreach ($this->aspects as $aspect) {
-            $metadata = $this->getAspectMetadata($aspect);
+        $set = $this->registry->resolve($className, $methodName);
 
-            foreach ($metadata['methods'] as $methodMeta) {
-                foreach ($methodMeta[$adviceType] as $advice) {
-                    $pointcut = $advice->pointcut;
-                    if ($this->matchesPointcut($className, $methodName, $pointcut)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return false;
+        return match ($adviceType) {
+            'befores', 'before' => $set->before !== [],
+            'afters', 'after' => $set->after !== [],
+            'arounds', 'around' => $set->around !== [],
+            'afterReturnings', 'afterReturning' => $set->afterReturning !== [],
+            'afterThrowings', 'afterThrowing' => $set->afterThrowing !== [],
+            default => false,
+        };
     }
 
     /**
-     * 匹配切入点表达式
+     * 判断类名+方法名是否匹配给定切入点表达式
      *
-     * 支持的表达式语法：
-     * - execution(* Class->method(..)) - 执行方法
-     * - execution(* Class->*(..)) - 类的所有方法
-     * - execution(* Namespace\*->*(..)) - 命名空间下所有类的所有方法
-     * - within(Namespace\*) - 命名空间下所有类
-     *
-     * @param string $className 类名
-     * @param string $methodName 方法名
+     * @param string $className 目标类名
+     * @param string $methodName 目标方法名
      * @param string $pointcut 切入点表达式
-     * @return bool 是否匹配
      */
     public function matchesPointcut(string $className, string $methodName, string $pointcut): bool
     {
-        if ($pointcut === '') {
+        if (trim($pointcut) === '') {
             return false;
         }
 
-        if (str_starts_with($pointcut, 'execution(')) {
-            return $this->matchesExecutionPointcut($className, $methodName, $pointcut);
+        try {
+            $matcher = PointcutParser::compile($pointcut);
+        } catch (AopException) {
+            return false;
         }
 
-        if (str_starts_with($pointcut, 'within(')) {
-            return $this->matchesWithinPointcut($className, $pointcut);
-        }
-
-        return Str::matchExpression($pointcut, $className . '->' . $methodName);
+        return $matcher(new MatchContext($className, $methodName));
     }
 
     /**
-     * 匹配 execution 切入点表达式
+     * 获取已注册的切面对象列表
      *
-     * @param string $className 类名
-     * @param string $methodName 方法名
-     * @param string $pointcut 切入点表达式
-     * @return bool 是否匹配
-     */
-    protected function matchesExecutionPointcut(string $className, string $methodName, string $pointcut): bool
-    {
-        $pattern = '/^execution\(\s*(.*?)\s*\)$/';
-        if (!preg_match($pattern, $pointcut, $matches)) {
-            return false;
-        }
-
-        $expression = $matches[1];
-
-        $parts = explode('->', $expression);
-        if (count($parts) !== 2) {
-            return false;
-        }
-
-        [$classPattern, $methodPart] = $parts;
-
-        $methodPattern = $methodPart;
-        if (str_ends_with($methodPattern, '(..)')) {
-            $methodPattern = substr($methodPattern, 0, -4);
-        } elseif (str_ends_with($methodPattern, '()')) {
-            $methodPattern = substr($methodPattern, 0, -2);
-        }
-
-        $classMatches = Str::matchExpression($classPattern, $className);
-        $methodMatches = Str::matchExpression($methodPattern, $methodName);
-
-        return $classMatches && $methodMatches;
-    }
-
-    /**
-     * 匹配 within 切入点表达式
-     *
-     * @param string $className 类名
-     * @param string $pointcut 切入点表达式
-     * @return bool 是否匹配
-     */
-    protected function matchesWithinPointcut(string $className, string $pointcut): bool
-    {
-        $pattern = '/^within\(\s*(.*?)\s*\)$/';
-        if (!preg_match($pattern, $pointcut, $matches)) {
-            return false;
-        }
-
-        $namespacePattern = $matches[1];
-
-        return Str::matchExpression($namespacePattern, $className);
-    }
-
-    /**
-     * 获取已注册的切面列表
-     *
-     * @return array<int, object> 切面对象数组
+     * @return array<int, object>
      */
     public function getRegisteredAspects(): array
     {
-        return $this->aspects;
+        return $this->registry->aspects();
     }
 
     /**
      * 获取切面元数据
      *
-     * @param object $aspect 切面对象
-     * @return array 切面元数据
+     * @return array<string, mixed>
      */
     public function getAspectMetadata(object $aspect): array
     {
-        $className = $aspect::class;
-        return self::$aspectMetadataCache[$className] ?? [];
+        return $this->registry->metadataOf($aspect);
     }
 
     /**
-     * 构建方法参数声明
-     *
-     * @param ReflectionMethod $method 方法反射对象
-     * @return string 参数声明字符串
+     * 获取通知注册表
      */
-    protected function buildMethodParameters(ReflectionMethod $method): string
+    public function getRegistry(): AdviceRegistry
     {
-        $parameters = [];
-
-        foreach ($method->getParameters() as $parameter) {
-            $parameters[] = $this->buildParameterString($parameter);
-        }
-
-        return implode(', ', $parameters);
+        return $this->registry;
     }
 
     /**
-     * 构建单个参数字符串
-     *
-     * @param \ReflectionParameter $parameter 参数反射对象
-     * @return string 参数字符串
+     * 获取代理工厂
      */
-    protected function buildParameterString(\ReflectionParameter $parameter): string
+    public function getProxyFactory(): ProxyFactory
     {
-        $paramStr = '';
-
-        if ($parameter->hasType()) {
-            $paramStr .= $this->buildTypeString($parameter->getType()) . ' ';
-        }
-
-        $paramStr .= '$' . $parameter->getName();
-
-        if ($parameter->isDefaultValueAvailable()) {
-            $paramStr .= ' = ' . $this->formatDefaultValue($parameter->getDefaultValue());
-        }
-
-        return $paramStr;
+        return $this->factory;
     }
 
     /**
-     * 构建类型字符串
+     * 获取运行期诊断信息
      *
-     * @param \ReflectionType $type 类型反射对象
-     * @return string 类型字符串
+     * @return array<string, mixed>
      */
-    protected function buildTypeString(\ReflectionType $type): string
+    public function diagnostics(): array
     {
-        if ($type instanceof ReflectionUnionType) {
-            return implode('|', array_map(
-                fn(\ReflectionNamedType $t) => $this->normalizeTypeName($t),
-                $type->getTypes()
-            ));
-        }
-
-        if ($type instanceof ReflectionNamedType) {
-            return $this->normalizeTypeName($type);
-        }
-
-        return (string) $type;
+        return [
+            'enabled' => $this->enabled,
+            'aspects' => count($this->registry->aspects()),
+            'advices' => count($this->registry->advices()),
+            'fingerprint' => $this->registry->fingerprint(),
+            'cacheDir' => $this->factory->getCacheDir(),
+            'skippedMethods' => $this->factory->skippedMethods(),
+            'metadata' => MetadataReader::getCacheStats(),
+        ];
     }
 
     /**
-     * 规范化类型名称
-     *
-     * @param ReflectionNamedType $type 命名类型
-     * @return string 规范化后的类型名称
+     * 带缓存的类反射
      */
-    protected function normalizeTypeName(ReflectionNamedType $type): string
+    protected function reflectClass(string $className): ReflectionClass
     {
-        $name = $type->getName();
-
-        if ($type->isBuiltin()) {
-            return $name;
-        }
-
-        return '\\' . $name;
+        return $this->classCache[$className] ??= Reflector::getClass($className);
     }
 
     /**
-     * 格式化默认值
-     *
-     * @param mixed $value 默认值
-     * @return string 格式化后的字符串
+     * 带缓存的方法反射
      */
-    protected function formatDefaultValue(mixed $value): string
+    protected function reflectMethod(string $className, string $methodName): ReflectionMethod
     {
-        return match (true) {
-            $value === null => 'null',
-            is_bool($value) => $value ? 'true' : 'false',
-            is_string($value) => "'" . addslashes($value) . "'",
-            is_numeric($value) => (string) $value,
-            default => var_export($value, true),
-        };
-    }
-
-    /**
-     * 构建方法返回类型声明
-     *
-     * @param ReflectionMethod $method 方法反射对象
-     * @return string 返回类型声明字符串
-     */
-    protected function buildMethodReturnType(ReflectionMethod $method): string
-    {
-        if (!$method->hasReturnType()) {
-            return '';
-        }
-
-        $returnType = $method->getReturnType();
-
-        if ($returnType instanceof ReflectionUnionType) {
-            $types = array_map(
-                fn(ReflectionNamedType $t) => $this->normalizeTypeName($t),
-                $returnType->getTypes()
-            );
-            return ': ' . implode('|', $types);
-        }
-
-        if ($returnType instanceof ReflectionNamedType) {
-            return ': ' . $this->normalizeTypeName($returnType);
-        }
-
-        return '';
-    }
-
-    /**
-     * 构建方法参数名称列表
-     *
-     * @param ReflectionMethod $method 方法反射对象
-     * @return string 参数名称列表字符串
-     */
-    protected function buildMethodParameterNames(ReflectionMethod $method): string
-    {
-        $names = array_map(
-            fn(\ReflectionParameter $p) => '$' . $p->getName(),
-            $method->getParameters()
-        );
-
-        return implode(', ', $names);
+        return $this->methodCache[$className . '::' . $methodName]
+            ??= Reflector::getMethod($className, $methodName);
     }
 }

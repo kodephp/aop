@@ -6,6 +6,7 @@ namespace Kode\Aop\Contract;
 
 use ReflectionClass;
 use ReflectionMethod;
+use Throwable;
 
 /**
  * 连接点接口
@@ -75,7 +76,7 @@ interface JoinPointInterface
      *
      * 返回方法调用的参数数组，参数按顺序排列。
      *
-     * @return array 方法参数数组
+     * @return array<int|string, mixed> 方法参数数组
      *
      * @example
      * ```php
@@ -91,7 +92,7 @@ interface JoinPointInterface
      * 用于修改方法调用的参数，设置后后续通知和目标方法将使用新的参数值。
      * 注意：参数数组的顺序必须与方法签名一致。
      *
-     * @param array $args 新的方法参数数组
+     * @param array<int|string, mixed> $args 新的方法参数数组
      *
      * @example
      * ```php
@@ -116,4 +117,38 @@ interface JoinPointInterface
      * ```
      */
     public function getPointcut(): string;
+
+    /**
+     * 获取目标方法的返回值
+     *
+     * 仅在 After / AfterReturning 通知中有意义；在 Before 通知中恒为 null。
+     *
+     * @return mixed 方法返回值
+     */
+    public function getResult(): mixed;
+
+    /**
+     * 获取目标方法抛出的异常
+     *
+     * 仅在 After / AfterThrowing 通知中有意义；方法正常返回时为 null。
+     *
+     * @return Throwable|null 异常实例
+     */
+    public function getException(): ?Throwable;
+
+    /**
+     * 获取目标方法名
+     *
+     * @return string 方法名
+     */
+    public function getMethodName(): string;
+
+    /**
+     * 获取目标类的完整类名
+     *
+     * 返回的是被代理的**原始类名**，而非运行时生成的代理类名。
+     *
+     * @return string 类名
+     */
+    public function getClassName(): string;
 }

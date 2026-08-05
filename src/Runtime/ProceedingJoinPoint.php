@@ -5,17 +5,19 @@ declare(strict_types=1);
 namespace Kode\Aop\Runtime;
 
 use Closure;
+use Kode\Aop\Contract\ProceedingJoinPointInterface;
 use ReflectionClass;
 use ReflectionMethod;
-use Kode\Aop\Contract\ProceedingJoinPointInterface;
 
 /**
- * 继续执行连接点实现类
+ * 可继续执行的连接点
  *
- * 继承自 JoinPoint，专门用于 Around（环绕）通知。
- * 提供了 proceed() 方法，允许控制是否继续执行原方法。
+ * 继承自 {@see JoinPoint}，为 Around 通知提供 proceed() 能力。
  *
- * 这是 AOP 框架中最强大的连接点类型，可以完全控制目标方法的执行流程。
+ * v3 引入了「继续执行栈」：当同一个方法上存在多个 Around 通知时，
+ * 内核会把它们编排成洋葱式的调用链，外层通知调用 proceed() 实际上
+ * 是在调用下一层通知，最内层才真正执行目标方法。这修复了 v2 中
+ * 「多个 Around 只有优先级最高的那个会生效」的缺陷。
  *
  * @package Kode\Aop\Runtime
  * @author Kode Team <382601296@qq.com>
@@ -24,14 +26,19 @@ use Kode\Aop\Contract\ProceedingJoinPointInterface;
 class ProceedingJoinPoint extends JoinPoint implements ProceedingJoinPointInterface
 {
     /**
-     * 构造函数
+     * 继续执行栈，栈顶为当前 Around 通知应调用的下一环
      *
+     * @var array<int, Closure(array<int|string, mixed>): mixed>
+     */
+    private array $proceedStack = [];
+
+    /**
      * @param ReflectionClass $class 目标类的反射对象
      * @param ReflectionMethod $method 目标方法的反射对象
      * @param object $object 目标对象实例
-     * @param array $arguments 方法参数数组
+     * @param array<int|string, mixed> $arguments 方法参数数组
      * @param string $pointcut 切入点表达式
-     * @param Closure $proceedClosure 原方法调用闭包
+     * @param Closure $proceedClosure 最内层的目标方法调用闭包
      */
     public function __construct(
         ReflectionClass $class,
@@ -47,24 +54,49 @@ class ProceedingJoinPoint extends JoinPoint implements ProceedingJoinPointInterf
     /**
      * {@inheritDoc}
      *
-     * 执行原方法，可以传入新的参数或使用原始参数。
-     *
-     * @param array $arguments 可选的方法参数，如果为空则使用原始参数
-     * @return mixed 原方法的返回值
+     * @param array<int|string, mixed> $arguments 可选的新参数，为空则沿用当前参数
      */
+    #[\Override]
     public function proceed(array $arguments = []): mixed
     {
-        $args = $arguments !== [] ? $arguments : $this->arguments;
-        return ($this->proceedClosure)(...$args);
+        if ($arguments !== []) {
+            $this->arguments = $arguments;
+        }
+
+        $next = end($this->proceedStack);
+
+        if ($next === false) {
+            return ($this->proceedClosure)(...$this->arguments);
+        }
+
+        return $next($this->arguments);
     }
 
     /**
-     * 执行原方法并传递命名参数
+     * 压入下一环调用闭包
      *
-     * 便捷方法，支持使用关联数组传递命名参数。
+     * @param Closure(array<int|string, mixed>): mixed $next
+     * @internal 由内核编排调用链时使用
+     */
+    public function pushProceed(Closure $next): void
+    {
+        $this->proceedStack[] = $next;
+    }
+
+    /**
+     * 弹出栈顶调用闭包
+     *
+     * @internal 由内核编排调用链时使用
+     */
+    public function popProceed(): void
+    {
+        array_pop($this->proceedStack);
+    }
+
+    /**
+     * 以命名参数继续执行原方法
      *
      * @param array<string, mixed> $namedParams 命名参数数组
-     * @return mixed 原方法的返回值
      */
     public function proceedWithNamedParams(array $namedParams): mixed
     {
@@ -72,11 +104,7 @@ class ProceedingJoinPoint extends JoinPoint implements ProceedingJoinPointInterf
     }
 
     /**
-     * 获取原方法调用闭包
-     *
-     * 返回原方法的调用闭包，可用于延迟执行或传递给其他函数。
-     *
-     * @return Closure 原方法调用闭包
+     * 获取最内层的目标方法调用闭包
      */
     public function getProceedClosure(): Closure
     {

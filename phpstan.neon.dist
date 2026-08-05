@@ -1,0 +1,8 @@
+parameters:
+    level: 8
+    ignoreErrors:
+        -
+            identifier: missingType.generics
+        -
+            message: '#expects class-string#'
+            path: src/Reflection/Reflector.php

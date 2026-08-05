@@ -18,6 +18,10 @@ Thumbs.db
 coverage/
 vendor/
 
+# Local only (never commit)
+.workbuddy/
+CHANGELOG*
+
 # Lock files
 composer.lock
 package-lock.json
