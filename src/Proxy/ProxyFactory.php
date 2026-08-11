@@ -159,9 +159,17 @@ final class ProxyFactory
     public function create(string $className, AspectKernelInterface $kernel, array $constructorArgs = []): object
     {
         $proxyClass = $this->proxyClassFor($className, $kernel);
-        $target = $proxyClass ?? $className;
 
-        return new $target(...$constructorArgs);
+        if ($proxyClass === null) {
+            return new $className(...$constructorArgs);
+        }
+
+        // 组合式代理（final 类）的构造函数接收「单一数组参数」，需原样透传而非展开
+        if (Reflector::getClass($className)->isFinal()) {
+            return new $proxyClass($constructorArgs);
+        }
+
+        return new $proxyClass(...$constructorArgs);
     }
 
     /**
@@ -186,6 +194,17 @@ final class ProxyFactory
         }
 
         $proxy = Reflector::getClass($proxyClass)->newInstanceWithoutConstructor();
+
+        // 组合式代理（final 类）：属性都在被包装实例上，直接绑定即可，无需拷贝。
+        if (Reflector::getClass($instance::class)->isFinal()) {
+            $proxyReflection = Reflector::getClass($proxyClass);
+            $proxy = $proxyReflection->newInstanceWithoutConstructor();
+            $proxyReflection->getMethod('__aopBind')->invoke($proxy, $instance);
+
+            return $proxy;
+        }
+
+        // 继承式代理：属性直接存在于代理实例上，需逐一复制原实例属性。
         $source = new ReflectionObject($instance);
 
         foreach ($source->getProperties() as $property) {
@@ -200,31 +219,54 @@ final class ProxyFactory
     }
 
     /**
-     * 收集目标类中需要织入的方法
+     * 收集目标类中需要生成代理方法的方法
+     *
+     * - 继承式（非 final）：仅收集命中通知且可织入的方法（含 protected）。
+     * - 组合式（final）：收集命中通知的公开方法，并补齐目标实现的全部接口方法，
+     *   以满足 `implements` 契约（无通知的接口方法仅做透传转发）。
      *
      * @return array<int, ReflectionMethod>
      */
     private function collectWeavableMethods(ReflectionClass $class): array
     {
         $className = $class->getName();
-        $filter = ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PROTECTED;
-        $methods = [];
+        $composition = $class->isFinal();
+        $filter = $composition ? ReflectionMethod::IS_PUBLIC : (ReflectionMethod::IS_PUBLIC | ReflectionMethod::IS_PROTECTED);
+        $collected = [];
 
         foreach ($class->getMethods($filter) as $method) {
             if (!$this->registry->hasAdvice($className, $method->getName())) {
                 continue;
             }
 
-            if (!$this->generator->isWeavable($method, $reason)) {
+            if (!$this->generator->isWeavable($method, $reason, $composition)) {
                 $this->skipped[$className][$method->getName()] = (string) $reason;
 
                 continue;
             }
 
-            $methods[] = $method;
+            $collected[$method->getName()] = $method;
         }
 
-        return $methods;
+        if ($composition) {
+            foreach ($class->getInterfaces() as $interface) {
+                foreach ($interface->getMethods() as $method) {
+                    $name = $method->getName();
+
+                    if (isset($collected[$name])) {
+                        continue;
+                    }
+
+                    if (!$this->generator->isWeavable($method, $reason, true)) {
+                        continue;
+                    }
+
+                    $collected[$name] = $method;
+                }
+            }
+        }
+
+        return array_values($collected);
     }
 
     /**

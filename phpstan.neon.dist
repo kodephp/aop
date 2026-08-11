@@ -6,3 +6,15 @@ parameters:
         -
             message: '#expects class-string#'
             path: src/Reflection/Reflector.php
+        # 组合式代理测试中，断言「代理不是目标 final 类本身」——该 instanceof 在静态类型上
+        # 恒为 false（ProxyInterface & GreeterInterface 与 FinalGreeter 不相交），但正是要验证的语义。
+        -
+            identifier: instanceof.alwaysFalse
+            path: tests/Proxy/FinalClassProxyTest.php
+        -
+            identifier: method.impossibleType
+            path: tests/Proxy/FinalClassProxyTest.php
+        # 无接口 final 类的代理方法调用是运行期动态派发，静态分析无法建模，此处特例忽略。
+        -
+            message: '#Call to an undefined method object::shout\(\)#'
+            path: tests/Proxy/FinalClassProxyTest.php

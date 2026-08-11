@@ -17,6 +17,7 @@
 - **丰富切入点**：`execution` / `within` / `@annotation` / `@within` / `@target` / `method`，支持 `&&` `||` `!` 逻辑运算、`类名+` 子类型、参数类型签名
 - **命名空间代理**：生成的代理类与目标类处于同一命名空间，彻底修复 v2 的 `ParseError`
 - **构造函数保留**：代理类完全继承目标类构造函数，不会吞掉构造逻辑
+- **final 类可代理**：目标类为 `final` 时自动切换为组合式代理（实现接口 + 包装真实实例），不再要求目标类必须非 final；`final` 方法同样可被织入
 - **文件缓存**：代理类可落盘为真实 PHP 文件并被 OPcache 缓存，且按切面集合指纹隔离，避免脏缓存
 - **类型安全**：充分利用 PHP 8.3 的类型系统与 `#[\Override]` 属性
 - **优先级控制**：通过 `#[Priority]` 注解控制通知执行顺序（After 系列遵循「先进后出」栈语义）
@@ -289,6 +290,25 @@ $result = $joinPoint->proceed(['newArg']);          // 使用新参数执行
 $result = $joinPoint->proceedWithNamedParams([...]); // 使用命名参数执行
 $closure = $joinPoint->getProceedClosure();         // 获取执行闭包
 ```
+
+### 代理生成策略（继承 vs 组合）
+
+框架按目标类是否 `final` 自动选择两种代理生成方式，**对调用方完全透明**：
+
+| 目标类 | 生成方式 | 代理关系 | 说明 |
+|--------|----------|----------|------|
+| 非 `final` | 继承式 | `class X__AopProxy extends X implements ProxyInterface` | 代理即目标类的子类，`instanceof X` 为真 |
+| `final` | 组合式 | `class X__AopProxy implements <接口...>, ProxyInterface` | 代理实现目标接口并内部包装真实实例，`instanceof X` 为假 |
+
+组合式代理（final 类）的特点：
+
+- **实现目标接口**：代理 `implements` 目标类实现的全部接口，因此类型提示 `接口` 处仍可传代理；
+- **包装真实实例**：内部持有 `new X(...)` 得到的真实对象，所有公开方法 / 接口方法转发给它执行；
+- **魔术委派**：属性访问经 `__get`/`__set`/`__isset`/`__unset`，未显式声明的方法经 `__call` 兜底，均会经过 AOP 内核（命中通知则织入，否则直接透传）；
+- **`final` 方法可织入**：因为只是调用被包装实例的方法而非覆盖它，`final` 方法同样可以被 Before/Around/AfterReturning 等通知介入；
+- **`wrap()` 行为**：组合式代理直接把被包装实例绑定到内部属性（不再逐个拷贝属性）。
+
+> 提示：若要让 `final` 类被代理后仍能在「要求具体类」的位置使用，请让它实现一个接口，并以接口类型接收代理。
 
 ## 🏗️ 核心组件
 

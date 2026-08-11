@@ -16,17 +16,17 @@ use ReflectionUnionType;
 /**
  * 代理类源码生成器
  *
- * 为目标类生成一个继承自它的子类，把命中通知的方法改写为
- * 「转发给内核 → 内核编排通知 → 回调 parent:: 原方法」。
+ * 为目标类生成代理类。根据目标类是否 `final` 自动选择两种策略：
  *
- * v3 相较 v2 修复/增强：
- * - **命名空间**：v2 直接 `class Ns\Cls__AopProxy extends ...`，
- *   对任何带命名空间的类都会 ParseError；v3 生成 `namespace Ns;` 声明；
- * - **构造函数**：v2 覆盖为空构造函数，导致目标类构造逻辑被吞掉；
- *   v3 完全不声明构造函数，直接继承；
- * - **类型渲染**：完整支持可空、联合、交集、DNF、self/parent/static；
- * - **安全跳过**：final / static / abstract / 引用参数 / 魔术方法；
- * - **void / never**：不会生成非法的 `return` 语句。
+ * 1. **继承式（非 final 类）** —— `class X__AopProxy extends X implements ProxyInterface`，
+ *    把命中通知的方法改写为「转发给内核 → 内核编排通知 → 回调 parent:: 原方法」。
+ *
+ * 2. **组合式（final 类）** —— `class X__AopProxy implements <接口...>, ProxyInterface`，
+ *    内部持有一个被包装的真实实例（`$__subject`），所有公开方法 / 接口方法转发到该实例。
+ *    由于不再继承目标类，final 类也能被代理；final 方法、protected 之外的场景同样适用。
+ *    属性访问通过 `__get`/`__set` 等魔术方法委派给被包装实例，方法调用通过 `__call` 兜底。
+ *
+ * v3.2 相较 v3.1：新增组合式代理，使 `final` 类（无论是否实现接口）均可被代理。
  *
  * @package Kode\Aop\Proxy
  * @author Kode Team <382601296@qq.com>
@@ -38,7 +38,7 @@ final class ProxyGenerator
      *
      * @param ReflectionClass $class 目标类
      * @param string $shortName 代理类短名（不含命名空间）
-     * @param array<int, ReflectionMethod> $methods 需要织入的方法
+     * @param array<int, ReflectionMethod> $methods 需要生成的方法（含 adviced 与接口方法）
      * @param bool $withOpenTag 是否输出 `<?php` 开头（写文件时需要）
      * @return string 代理类源码
      */
@@ -50,12 +50,12 @@ final class ProxyGenerator
     ): string {
         $namespace = $class->getNamespaceName();
         $target = $class->getName();
-        $modifier = $class->isReadOnly() ? 'readonly ' : '';
+        $composition = $class->isFinal();
 
         $body = '';
 
         foreach ($methods as $method) {
-            $body .= $this->generateMethod($class, $method);
+            $body .= $this->generateMethod($class, $method, $composition);
         }
 
         $code = '';
@@ -70,8 +70,18 @@ final class ProxyGenerator
 
         $escapedTarget = addslashes($target);
 
+        if ($composition) {
+            $interfaces = $this->renderInterfaces($class);
+            $header = "class {$shortName} implements {$interfaces}\\Kode\\Aop\\Contract\\ProxyInterface";
+            $members = $this->compositionMembers($escapedTarget, $target);
+        } else {
+            $modifier = $class->isReadOnly() ? 'readonly ' : '';
+            $header = "{$modifier}class {$shortName} extends \\{$target} implements \\Kode\\Aop\\Contract\\ProxyInterface";
+            $members = '';
+        }
+
         $code .= <<<PHP
-{$modifier}class {$shortName} extends \\{$target} implements \\Kode\\Aop\\Contract\\ProxyInterface
+{$header}
 {
     public const string __AOP_TARGET_CLASS = '{$escapedTarget}';
 
@@ -81,7 +91,7 @@ final class ProxyGenerator
     {
         return self::__AOP_TARGET_CLASS;
     }
-{$body}}
+{$members}{$body}}
 
 PHP;
 
@@ -89,12 +99,95 @@ PHP;
     }
 
     /**
+     * 渲染目标类实现的全部接口列表（含 ProxyInterface 之前的前缀逗号处理）
+     *
+     * @return string 例如 `\\Foo\\Bar, ` 或空串
+     */
+    private function renderInterfaces(ReflectionClass $class): string
+    {
+        $names = [];
+
+        foreach ($class->getInterfaces() as $interface) {
+            $names[] = '\\' . $interface->getName();
+        }
+
+        return $names === [] ? '' : implode(', ', $names) . ', ';
+    }
+
+    /**
+     * 组合式代理的固定成员：被包装实例、绑定方法、构造函数与魔术委派
+     *
+     * @param string $escapedTarget addslashes 后的目标类名（用于常量字符串字面量）
+     * @param string $target 原始目标类全限定名（用于 new 实例化）
+     */
+    private function compositionMembers(string $escapedTarget, string $target): string
+    {
+        return <<<PHP
+
+    private object \$__subject;
+
+    /**
+     * 把一个已构造好的实例绑定为被包装目标（wrap 场景使用）
+     */
+    public function __aopBind(object \$subject): void
+    {
+        \$this->__subject = \$subject;
+    }
+
+    /**
+     * 组合式代理构造函数：用传入的构造参数实例化被包装目标
+     *
+     * @param array<int|string, mixed> \$__aopArgs 透传给目标类构造函数的参数
+     */
+    public function __construct(array \$__aopArgs = [])
+    {
+        \$this->__subject = new \\{$target}(...\$__aopArgs);
+    }
+
+    public function __get(string \$__aopName): mixed
+    {
+        return \$this->__subject->{\$__aopName};
+    }
+
+    public function __set(string \$__aopName, mixed \$__aopValue): void
+    {
+        \$this->__subject->{\$__aopName} = \$__aopValue;
+    }
+
+    public function __isset(string \$__aopName): bool
+    {
+        return isset(\$this->__subject->{\$__aopName});
+    }
+
+    public function __unset(string \$__aopName): void
+    {
+        unset(\$this->__subject->{\$__aopName});
+    }
+
+    /**
+     * 未显式声明方法的兜底转发：仍然经过内核（命中通知则织入，否则直接透传）
+     */
+    public function __call(string \$__aopMethod, array \$__aopArgs): mixed
+    {
+        return self::\$__aopKernel->invokeAdvice(
+            \$this,
+            \$__aopMethod,
+            \$__aopArgs,
+            fn(mixed ...\$__aopForward): mixed => \$this->__subject->{\$__aopMethod}(...\$__aopForward)
+        );
+    }
+
+PHP;
+    }
+
+    /**
      * 判断方法是否可以被织入
      *
      * @param ReflectionMethod $method 待检查方法
      * @param string|null $reason 输出参数，返回不可织入的原因
+     * @param bool $composition 是否为组合式代理（final 类）；组合模式放宽 final/引用/默认值的限制
      */
-    public function isWeavable(ReflectionMethod $method, ?string &$reason = null): bool
+    public function isWeavable(ReflectionMethod $method, ?string &$reason = null, bool $composition = false): bool
     {
         $reason = null;
 
@@ -116,35 +209,37 @@ PHP;
             return false;
         }
 
-        if ($method->isFinal()) {
-            $reason = 'final 方法无法被子类覆盖';
-
-            return false;
-        }
-
-        if ($method->isAbstract()) {
-            $reason = '抽象方法没有可回调的实现';
-
-            return false;
-        }
-
         if ($method->isPrivate()) {
-            $reason = 'private 方法无法被子类覆盖';
+            $reason = 'private 方法无法被代理访问';
 
             return false;
         }
 
-        foreach ($method->getParameters() as $parameter) {
-            if ($parameter->isPassedByReference()) {
-                $reason = '含引用传参，代理会破坏引用语义';
+        if (!$composition) {
+            if ($method->isAbstract()) {
+                $reason = '抽象方法没有可回调的实现';
 
                 return false;
             }
 
-            if (!$this->canRenderDefaultValue($parameter)) {
-                $reason = sprintf('参数 $%s 的默认值无法静态还原', $parameter->getName());
+            if ($method->isFinal()) {
+                $reason = 'final 方法无法被子类覆盖';
 
                 return false;
+            }
+
+            foreach ($method->getParameters() as $parameter) {
+                if ($parameter->isPassedByReference()) {
+                    $reason = '含引用传参，代理会破坏引用语义';
+
+                    return false;
+                }
+
+                if (!$this->canRenderDefaultValue($parameter)) {
+                    $reason = sprintf('参数 $%s 的默认值无法静态还原', $parameter->getName());
+
+                    return false;
+                }
             }
         }
 
@@ -161,11 +256,7 @@ PHP;
         $name = $class->getName();
 
         if ($class->isInterface() || $class->isTrait() || $class->isEnum()) {
-            throw AopException::proxyGenerationFailed($name, '接口、Trait 与枚举不支持继承式代理');
-        }
-
-        if ($class->isFinal()) {
-            throw AopException::proxyGenerationFailed($name, 'final 类无法被继承，请去掉 final 或改用接口代理');
+            throw AopException::proxyGenerationFailed($name, '接口、Trait 与枚举不支持代理');
         }
 
         if ($class->isAbstract()) {
@@ -179,12 +270,16 @@ PHP;
         if ($class->isInternal()) {
             throw AopException::proxyGenerationFailed($name, 'PHP 内置类不支持代理');
         }
+
+        // final 类不再抛错：改用组合式代理（实现接口 + 包装），仍可正常织入。
     }
 
     /**
      * 生成单个代理方法
+     *
+     * @param bool $composition 组合式代理时，回调目标的包装实例而非 parent::
      */
-    private function generateMethod(ReflectionClass $class, ReflectionMethod $method): string
+    private function generateMethod(ReflectionClass $class, ReflectionMethod $method, bool $composition): string
     {
         $name = $method->getName();
         $visibility = $method->isProtected() ? 'protected' : 'public';
@@ -193,6 +288,10 @@ PHP;
         $argsExpression = $this->renderArgumentsArray($method);
 
         $returnKeyword = $this->isNonReturning($method) ? '' : 'return ';
+
+        $callback = $composition
+            ? "\$this->__subject->{$name}(...\$__aopArgs)"
+            : "parent::{$name}(...\$__aopArgs)";
 
         return <<<PHP
 
@@ -203,7 +302,7 @@ PHP;
             \$this,
             '{$name}',
             {$argsExpression},
-            fn(mixed ...\$__aopArgs): mixed => parent::{$name}(...\$__aopArgs)
+            fn(mixed ...\$__aopArgs): mixed => {$callback}
         );
     }
 PHP;
@@ -224,7 +323,7 @@ PHP;
     }
 
     /**
-     * 渲染参数列表
+     * 渲染参数列表（组合/继承通用；引用参数渲染 &，不可静态还原的默认值则省略）
      */
     private function renderParameters(ReflectionClass $class, ReflectionMethod $method): string
     {
@@ -242,9 +341,13 @@ PHP;
                 $chunk .= '...';
             }
 
+            if ($parameter->isPassedByReference()) {
+                $chunk .= '&';
+            }
+
             $chunk .= '$' . $parameter->getName();
 
-            if (!$parameter->isVariadic() && $parameter->isDefaultValueAvailable()) {
+            if (!$parameter->isVariadic() && $parameter->isDefaultValueAvailable() && $this->canRenderDefaultValue($parameter)) {
                 $chunk .= ' = ' . $this->renderDefaultValue($parameter);
             }
 
