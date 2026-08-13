@@ -21,12 +21,16 @@
 - **文件缓存**：代理类可落盘为真实 PHP 文件并被 OPcache 缓存，且按切面集合指纹隔离，避免脏缓存
 - **类型安全**：充分利用 PHP 8.3 的类型系统与 `#[\Override]` 属性
 - **优先级控制**：通过 `#[Priority]` 注解控制通知执行顺序（After 系列遵循「先进后出」栈语义）
+- **声明式关注点**：内置 `#[Log]` / `#[Cache]` / `#[Transactional]` 三个声明式注解，直接标注业务方法即可自动织入日志 / 缓存 / 事务，无需手写切入点表达式
+- **框架无关装配**：内置 `AopProvider` 装配器，注入 PSR-3 日志器、PSR-16 缓存、事务管理器契约后一行 `boot()`，按需启用对应内置切面（未注入依赖则不注册，零开销）
 
 ## 📦 安装
 
 ```bash
 composer require kode/aop
 ```
+
+`kode/aop` 仅依赖 `kode/attributes`、`psr/log`（PSR-3）、`psr/simple-cache`（PSR-16）与 PHP 8.3+，无任何框架耦合。声明式 `#[Log]` / `#[Cache]` 需要你提供一个 PSR-3 日志器与 PSR-16 缓存实现（Laravel / Symfony 等框架容器里通常已自带）。
 
 ## 🚀 快速开始
 
@@ -310,6 +314,62 @@ $closure = $joinPoint->getProceedClosure();         // 获取执行闭包
 
 > 提示：若要让 `final` 类被代理后仍能在「要求具体类」的位置使用，请让它实现一个接口，并以接口类型接收代理。
 
+### 声明式关注点（#[Log] / #[Cache] / #[Transactional]）
+
+v3.3 起，除了手写切面 + 切入点表达式，还可以直接用声明式注解把三类横切关注点标注在业务方法（或类）上，由内置元切面自动织入——无需写一行切入点表达式。
+
+```php
+use Kode\Aop\Attribute\Log;
+use Kode\Aop\Attribute\Cache;
+use Kode\Aop\Attribute\Transactional;
+use Kode\Aop\Attribute\LogLevel;
+
+class OrderService
+{
+    // 日志：记录入参 / 出参 / 耗时
+    #[Log(level: LogLevel::Info, logArgs: true, logResult: true)]
+    public function create(int $userId): int { /* ... */ }
+
+    // 缓存：按「方法 + 参数」缓存返回值 300 秒
+    #[Cache(ttl: 300, prefix: 'order')]
+    public function detail(int $id): array { /* ... */ }
+
+    // 事务：成功提交、异常回滚
+    #[Transactional(name: 'place')]
+    public function place(int $userId, int $productId): void { /* ... */ }
+}
+```
+
+- 标注在**类**上时对类内所有公共方法生效；标注在**方法**上时仅对该方法生效，方法级优先于类级。
+- 命中注解才织入，未命中则直接 `proceed()`，零逻辑开销。
+- 三个注解均支持「方法 + 参数」维度；`#[Cache]` 的返回值需可被 `var_export` 序列化（PSR-16 要求）。
+
+### AopProvider：框架无关装配器
+
+声明式切面依赖外部能力（日志器 / 缓存 / 事务管理器）。`AopProvider` 把这些依赖按契约注入后统一装配并 `boot()`，**未注入的依赖不会注册对应内置切面**（按需启用、零开销）：
+
+```php
+use Kode\Aop\Aop;
+use Kode\Aop\Provider\AopProvider;
+use Kode\Aop\Runtime\PdoTransactionManager;
+
+AopProvider::create()
+    ->withLogger($psr3Logger)                                   // 启用 #[Log]
+    ->withCache($psr16Cache)                                    // 启用 #[Cache]
+    ->withTransactionManager(new PdoTransactionManager($pdo))   // 启用 #[Transactional]
+    ->withCacheDir(__DIR__ . '/runtime/aop')                    // 代理类文件缓存目录
+    ->register(CustomAuditAspect::class)                        // 追加自定义切面
+    ->boot();
+
+$orderService = Aop::proxy(OrderService::class);                // 已自动织入声明式关注点
+```
+
+- `withLogger()` 接受 **PSR-3**（`Psr\Log\LoggerInterface`）；
+- `withCache()` 接受 **PSR-16**（`Psr\SimpleCache\CacheInterface`）；
+- `withTransactionManager()` 接受库定义的 `Kode\Aop\Contract\TransactionManagerInterface`
+  契约（原生场景用内置 `PdoTransactionManager`；Laravel / Doctrine 等应改用对应连接层适配器）。
+- 框架集成示例见下文「Laravel 集成」。
+
 ## 🏗️ 核心组件
 
 ```
@@ -323,7 +383,11 @@ src/
 │   ├── AfterReturning.php   # 返回后执行（可替换返回值）
 │   ├── AfterThrowing.php    # 异常时执行（按异常类型过滤）
 │   ├── Pointcut.php         # 命名切点
-│   └── Priority.php         # 执行优先级
+│   ├── Priority.php          # 执行优先级
+│   ├── LogLevel.php         # 日志级别枚举（对齐 PSR-3）
+│   ├── Log.php              # 声明式日志注解 #[Log]
+│   ├── Cache.php            # 声明式缓存注解 #[Cache]
+│   └── Transactional.php    # 声明式事务注解 #[Transactional]
 │
 ├── Pointcut/                # 切入点表达式
 │   ├── PointcutParser.php   # 递归下降解析器（编译为匹配闭包）
@@ -336,6 +400,11 @@ src/
 │   ├── AdviceExecutor.php   # Before/Around/After... 时序编排
 │   └── AdviceType.php       # 通知类型枚举
 │
+├── Aspect/                  # 内置声明式切面（元切面）
+│   ├── LoggingAspect.php    # #[Log] 自动织入（依赖 PSR-3）
+│   ├── CachingAspect.php    # #[Cache] 自动织入（依赖 PSR-16）
+│   └── TransactionalAspect.php # #[Transactional] 自动织入（依赖事务管理器契约）
+│
 ├── Proxy/                   # 代理生成
 │   ├── ProxyGenerator.php   # 代理类源码生成器
 │   └── ProxyFactory.php     # 命名/生成/缓存/实例化
@@ -345,12 +414,17 @@ src/
 │   ├── ProxyInterface.php   # 代理对象标记
 │   ├── JoinPointInterface.php
 │   ├── ProceedingJoinPointInterface.php
-│   └── AspectKernelInterface.php
+│   ├── AspectKernelInterface.php
+│   └── TransactionManagerInterface.php # 事务管理器契约（#[Transactional] 依赖）
+│
+├── Provider/                # 框架无关装配
+│   └── AopProvider.php      # 统一装配声明式关注点 + 自定义切面
 │
 ├── Runtime/                 # 运行时核心
 │   ├── JoinPoint.php        # 封装调用上下文
 │   ├── ProceedingJoinPoint.php # Around 场景专用（洋葱链）
-│   └── AspectKernel.php     # 核心调度器
+│   ├── AspectKernel.php     # 核心调度器
+│   └── PdoTransactionManager.php # 基于原生 PDO 的默认事务管理器
 │
 ├── Reflection/              # 安全反射封装
 │   ├── Reflector.php        # 安全获取类/方法/属性元数据
@@ -367,6 +441,8 @@ src/
 
 ### Laravel 集成
 
+推荐用框架无关的 `AopProvider` 装配，再用一个适配器把 Laravel 的 DB 连接桥接成库的事务管理器契约。完整示例见仓库 `examples/laravel/AopServiceProvider.php`：
+
 ```php
 // app/Providers/AopServiceProvider.php
 <?php
@@ -374,19 +450,44 @@ src/
 namespace App\Providers;
 
 use Illuminate\Support\ServiceProvider;
-use Kode\Aop\Runtime\AspectKernel;
+use Kode\Aop\Contract\TransactionManagerInterface;
+use Kode\Aop\Provider\AopProvider;
+use Psr\Log\LoggerInterface;
+use Psr\SimpleCache\CacheInterface;
 
 class AopServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->app->singleton(AspectKernel::class, function () {
-            $kernel = AspectKernel::getInstance();
-            $kernel->registerAspect(new \App\Aspects\LoggingAspect());
-            $kernel->registerAspect(new \App\Aspects\TransactionAspect());
-            $kernel->init();
-            return $kernel;
+        // 把 Laravel 数据库连接适配为库的事务管理器契约
+        $this->app->singleton(TransactionManagerInterface::class, function () {
+            $connection = $this->app->make('db')->connection();
+
+            return new class($connection) implements TransactionManagerInterface {
+                public function __construct(private $connection) {}
+                public function begin(): void { $this->connection->beginTransaction(); }
+                public function commit(): void { $this->connection->commit(); }
+                public function rollback(): void { $this->connection->rollBack(); }
+                public function transactional(callable $callback): mixed
+                {
+                    return $this->connection->transaction($callback);
+                }
+            };
         });
+
+        $this->app->singleton(AopProvider::class, function () {
+            return AopProvider::create()
+                ->withLogger($this->app->make(LoggerInterface::class))
+                ->withCache($this->app->make(CacheInterface::class))
+                ->withTransactionManager($this->app->make(TransactionManagerInterface::class))
+                ->withCacheDir($this->app->storagePath('framework/aop'))
+                ->register(\App\Aspect\CustomAuditAspect::class);
+        });
+    }
+
+    public function boot(): void
+    {
+        $this->app->make(AopProvider::class)->boot();
     }
 }
 ```
