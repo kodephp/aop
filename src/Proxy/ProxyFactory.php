@@ -21,8 +21,8 @@ use ReflectionObject;
  * 1. **进程内缓存** —— 同一请求内同一类只生成一次；
  * 2. **文件缓存（可选）** —— 指定 cacheDir 后代理类会落盘为真实 PHP 文件，
  *    可被 OPcache 编译缓存，比 eval() 更快且便于调试；
- * 3. **指纹隔离** —— 代理类名包含切面集合指纹，切面变化会自动生成新代理类，
- *    不会出现「改了切面但代理没更新」的脏缓存问题。
+ * 3. **指纹隔离** —— 代理类名包含「切面集合指纹 + 目标类源码指纹」，切面或目标类源码
+ *    变化都会生成新代理类；否则落盘的旧代理会因签名不匹配触发不可捕获的编译期致命错误。
  *
  * @package Kode\Aop\Proxy
  * @author Kode Team <382601296@qq.com>
@@ -35,6 +35,32 @@ final class ProxyFactory
      * @var array<string, class-string|false>
      */
     private array $cache = [];
+
+    /**
+     * 目标类源码文件清单缓存：`类名` => 参与签名计算的文件路径列表
+     *
+     * @var array<string, array<int, string>>
+     */
+    private array $sourceFiles = [];
+
+    /**
+     * 单文件内容哈希缓存：`文件路径` => [stat 串, 内容哈希]
+     *
+     * stat 未变即复用哈希，热路径只付出一组 stat 成本，不重复读盘。
+     *
+     * @var array<string, array{0: string, 1: string}>
+     */
+    private array $fileHashes = [];
+
+    /**
+     * 源码指纹相关缓存的条目上限：常驻 worker 内防止按类无限增长
+     */
+    private const int MAX_SOURCE_CACHE = 1024;
+
+    /**
+     * 生成器模板指纹（本包 ProxyGenerator 源码哈希），首次使用时求值
+     */
+    private ?string $templateHash = null;
 
     /**
      * 源码生成器
@@ -68,6 +94,8 @@ final class ProxyFactory
     {
         $this->cacheDir = $directory;
         $this->cache = [];
+        $this->sourceFiles = [];
+        $this->fileHashes = [];
     }
 
     /**
@@ -85,6 +113,8 @@ final class ProxyFactory
     {
         $this->cache = [];
         $this->skipped = [];
+        $this->sourceFiles = [];
+        $this->fileHashes = [];
     }
 
     /**
@@ -108,7 +138,9 @@ final class ProxyFactory
     public function proxyClassFor(string $className, AspectKernelInterface $kernel): ?string
     {
         $className = ltrim($className, '\\');
-        $key = $className . '|' . $this->registry->fingerprint();
+        $key = $className . '|' . $this->registry->fingerprint()
+            . '|' . $this->sourceFingerprint($className)
+            . '|' . $this->templateFingerprint();
 
         if (array_key_exists($key, $this->cache)) {
             $cached = $this->cache[$key];
@@ -270,6 +302,167 @@ final class ProxyFactory
     }
 
     /**
+     * 目标类源码指纹
+     *
+     * 覆盖目标类自身与父类链、特征、接口的源码文件 —— 代理类的方法原型由这些共同决定。
+     * 文件清单按类名缓存一次，内容哈希按文件 stat（inode:大小:修改时间）缓存，
+     * 因此热路径命中时只做一组 stat，不重复反射与读盘。
+     */
+    private function sourceFingerprint(string $className): string
+    {
+        if (!array_key_exists($className, $this->sourceFiles)) {
+            $files = $this->collectSourceFiles(Reflector::getClass($className));
+
+            if (count($this->sourceFiles) >= self::MAX_SOURCE_CACHE) {
+                $this->sourceFiles = [];
+                $this->fileHashes = [];
+            }
+
+            $this->sourceFiles[$className] = $files;
+        }
+
+        $parts = [];
+
+        foreach ($this->sourceFiles[$className] as $file) {
+            $parts[] = $file . ':' . $this->fileHash($file);
+        }
+
+        return $parts === [] ? 'internal' : substr(hash('xxh128', implode('|', $parts)), 0, 16);
+    }
+
+    /**
+     * 收集参与签名的源码文件（去重、稳定排序）
+     *
+     * @return array<int, string>
+     */
+    private function collectSourceFiles(ReflectionClass $class): array
+    {
+        $files = [];
+        $pending = [$class];
+        $seen = [];
+
+        while ($pending !== []) {
+            $current = array_pop($pending);
+            $name = $current->getName();
+
+            if (isset($seen[$name])) {
+                continue;
+            }
+
+            $seen[$name] = true;
+
+            $file = $current->getFileName();
+
+            if (is_string($file)) {
+                $files[$file] = true;
+            }
+
+            $related = [];
+
+            foreach ($current->getTraits() as $trait) {
+                $related[] = $trait;
+            }
+
+            foreach ($current->getInterfaces() as $interface) {
+                $related[] = $interface;
+            }
+
+            $parent = $current->getParentClass();
+
+            if ($parent !== false) {
+                $related[] = $parent;
+            }
+
+            // 防御异常反射图（如循环引用）导致常驻进程内空转
+            if (count($seen) > self::MAX_SOURCE_CACHE) {
+                break;
+            }
+
+            foreach ($related as $item) {
+                $pending[] = $item;
+            }
+        }
+
+        $list = array_keys($files);
+        sort($list);
+
+        return $list;
+    }
+
+    /**
+     * 生成器模板指纹
+     *
+     * 升级本包后旧代理文件必须作废：代理代码由「模板 + 目标类源码」共同决定，
+     * 只看目标类会让上一版本生成的文件被继续复用，进而触发不可捕获的编译期致命错误。
+     */
+    private function templateFingerprint(): string
+    {
+        if ($this->templateHash !== null) {
+            return $this->templateHash;
+        }
+
+        $file = (new ReflectionClass($this->generator))->getFileName();
+
+        return $this->templateHash = is_string($file) ? $this->fileHash($file) : 'builtin';
+    }
+
+    /**
+     * 单文件内容哈希（stat 未变即复用）
+     */
+    private function fileHash(string $file): string
+    {
+        clearstatcache(true, $file);
+        $stat = ((int) @filesize($file)) . ':' . ((int) @filemtime($file)) . ':' . ((int) @fileinode($file));
+        $cached = $this->fileHashes[$file] ?? null;
+
+        if ($cached !== null && $cached[0] === $stat) {
+            return $cached[1];
+        }
+
+        $hash = (string) @hash_file('xxh128', $file);
+
+        if ($hash === '') {
+            // 不可读（权限/phar 流包装失败）时退化为 stat 值，仍能感知变化
+            $hash = 'stat:' . $stat;
+        }
+
+        if (count($this->fileHashes) >= self::MAX_SOURCE_CACHE) {
+            $this->fileHashes = [];
+        }
+
+        $this->fileHashes[$file] = [$stat, $hash];
+
+        return $hash;
+    }
+
+    /**
+     * 清理同一目标类的旧代理文件
+     *
+     * 类名带指纹后缀，切面或源码一变就换一个文件名；不清理会在缓存目录里无限堆积。
+     */
+    private function pruneOrphanProxies(string $file): void
+    {
+        $base = basename($file);
+        $pos = strrpos($base, '__AopProxy_');
+
+        if ($pos === false) {
+            return;
+        }
+
+        $siblings = glob(dirname($file) . DIRECTORY_SEPARATOR . substr($base, 0, $pos) . '__AopProxy_*.php');
+
+        if ($siblings === false) {
+            return;
+        }
+
+        foreach ($siblings as $sibling) {
+            if ($sibling !== $file) {
+                @unlink($sibling);
+            }
+        }
+    }
+
+    /**
      * 生成并载入代理类
      *
      * @param array<int, ReflectionMethod> $methods
@@ -306,6 +499,8 @@ final class ProxyFactory
                     sprintf('代理类文件写入失败: %s', $file)
                 );
             }
+
+            $this->pruneOrphanProxies($file);
         }
 
         require_once $file;

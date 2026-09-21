@@ -70,6 +70,30 @@ class AdviceRegistryTest extends TestCase
         $this->assertSame($first, $second);
     }
 
+    public function testSameAspectInstanceRegisteredTwiceIsIgnored(): void
+    {
+        $registry = new AdviceRegistry();
+        $aspect = new RegistryFixtureAspect();
+
+        $registry->register($aspect);
+        $registry->register($aspect);
+
+        $this->assertCount(1, $registry->aspects());
+        $this->assertCount(3, $registry->advices());
+
+        $set = $registry->resolve(SampleService::class, 'create');
+        $this->assertCount(1, $set->before, '同一实例重复登记不得让通知执行两遍');
+    }
+
+    public function testDistinctAspectInstancesAreBothKept(): void
+    {
+        $registry = new AdviceRegistry();
+        $registry->register(new RegistryFixtureAspect());
+        $registry->register(new RegistryFixtureAspect());
+
+        $this->assertCount(2, $registry->aspects(), '不同实例（可带不同状态）仍是两个切面');
+    }
+
     public function testNoAdviceForUnmatchedMethod(): void
     {
         $registry = new AdviceRegistry();

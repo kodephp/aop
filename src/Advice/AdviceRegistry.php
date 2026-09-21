@@ -60,11 +60,20 @@ final class AdviceRegistry
     /**
      * 注册一个切面对象
      *
+     * 同一实例重复登记会被跳过：否则会编译出两份相同通知，被代理方法每次调用都执行两遍
+     * （插件重复 boot、内核与手动登记撞车等场景）。
+     *
      * @param object $aspect 切面实例
      * @throws AopException 切面非法或被禁用时抛出
      */
     public function register(object $aspect): void
     {
+        foreach ($this->aspects as $registered) {
+            if ($registered === $aspect) {
+                return;
+            }
+        }
+
         $className = $aspect::class;
         $aspectMeta = $this->resolveAspectAttribute($className);
 
