@@ -18,3 +18,8 @@ parameters:
         -
             message: '#Call to an undefined method object::shout\(\)#'
             path: tests/Proxy/FinalClassProxyTest.php
+        # 该用例专门喂「不存在的类名 / 带前导反斜杠的类名」给内核，验证其归一化与报错；
+        # 这类字符串在静态类型上当然不是 class-string，正是要测的非法输入。
+        -
+            identifier: argument.type
+            path: tests/Runtime/AspectKernelRegistrationTest.php

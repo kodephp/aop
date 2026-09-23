@@ -503,7 +503,14 @@ final class ProxyFactory
             $this->pruneOrphanProxies($file);
         }
 
-        require_once $file;
+        // 并发进程可能把刚 rename 出来的文件当作旧版本清掉了（各进程的切面集合可以不同，
+        // 于是彼此的代理同为兄弟文件却互不相干）。require 失败抛 Error，兜不住就是整条
+        // 请求/启动链路 fatal，因此这里退回一次性内存织入：本次请求照常工作。
+        try {
+            @require_once $file;
+        } catch (\Throwable) {
+            eval($this->generator->generate($class, $shortName, $methods));
+        }
 
         if (!class_exists($proxyClass, false)) {
             throw AopException::proxyGenerationFailed(

@@ -63,6 +63,10 @@ final class AdviceRegistry
      * 同一实例重复登记会被跳过：否则会编译出两份相同通知，被代理方法每次调用都执行两遍
      * （插件重复 boot、内核与手动登记撞车等场景）。
      *
+     * 注意这里只按**实例**去重：同类名不同实例是有意为之的用法（例如两个 LoggingAspect
+     * 各挂一个 logger，双通道输出），不能一并吞掉。「同一类名被登记两次」的撞车请在
+     * {@see AspectKernel::registerAspects()} 的类名入口拦下。
+     *
      * @param object $aspect 切面实例
      * @throws AopException 切面非法或被禁用时抛出
      */

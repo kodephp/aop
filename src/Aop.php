@@ -35,8 +35,19 @@ use Kode\Attributes\CacheInterface;
  */
 final class Aop
 {
+    /** @var string 版本号（与 composer.json 的 version 保持同步，漏改由 VersionGuardTest 拦下） */
+    public const string VERSION = '3.5.0';
+
     private function __construct()
     {
+    }
+
+    /**
+     * 获取本包版本号
+     */
+    public static function version(): string
+    {
+        return self::VERSION;
     }
 
     /**

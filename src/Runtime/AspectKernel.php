@@ -143,18 +143,37 @@ class AspectKernel implements AspectKernelInterface
      *
      * 支持传入切面实例，或可无参实例化的切面类名。
      *
+     * 类名入口按「同名只登记一次」处理：显式配置与目录扫描撞车时，同一个类名会在列表里
+     * 出现两次，各自 new 出一个实例，于是编译出两份逐条相同的通知，被代理方法每次调用都把
+     * 同一段切面逻辑跑两遍（日志双写、缓存双扣、事务嵌套）。实例入口不去重——同类的两个
+     * 实例是有意用法，见 {@see AdviceRegistry::register()}。
+     *
      * @param array<int, object|class-string> $aspects
      * @throws AopException 切面非法时抛出
      */
     public function registerAspects(array $aspects): void
     {
+        /** @var array<class-string, true> $registered */
+        $registered = [];
+
+        foreach ($this->registry->aspects() as $aspect) {
+            $registered[$aspect::class] = true;
+        }
+
         foreach ($aspects as $aspect) {
             if (is_string($aspect)) {
-                if (!class_exists($aspect)) {
+                $className = ltrim($aspect, '\\');
+
+                if (!class_exists($className)) {
                     throw AopException::classNotFound($aspect);
                 }
 
-                $aspect = new $aspect();
+                if (isset($registered[$className])) {
+                    continue;
+                }
+
+                $registered[$className] = true;
+                $aspect = new $className();
             }
 
             $this->registerAspect($aspect);

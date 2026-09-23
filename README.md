@@ -339,6 +339,45 @@ $closure = $joinPoint->getProceedClosure();         // 获取执行闭包
 > 已知边界：同一秒内、且字节数完全相同的两次源码修改（例如只改一个同长度变量名）stat 不变，
 > 指纹不会更新。日常签名改动必然改变文件大小，重启进程即彻底重算。
 
+### 常驻多进程下的织入安全（v3.5.0）
+
+一个 master 带 N 个 worker（`kode start`、php-fpm 常驻、swoole 多进程）时，各进程会各自织入自己的代理文件。
+两条规则保证这种形态不会把请求打死：
+
+**1. 代理文件读不到 ≠ 整条链路 fatal**
+
+不同进程的切面集合可以不同（http worker 与 queue worker 各装各的插件、滚动重启期间的两代代码并存），
+于是彼此的代理文件同为「同一目标类的兄弟文件」却互不相干。A 进程清理旧版本时，
+可能正好删掉 B 进程刚 `rename` 出来、还没来得及 `require` 的那一个。
+
+`require_once` 失败抛的是 `Error`，此前没人接住它——压测下来（每轮改动目标类源码、6 个进程并发织入同一缓存目录）
+6 个进程里 5 个直接 fatal：
+
+```
+Fatal error: Uncaught Error: Failed opening required '.../SampleService__AopProxy_xxx.php'
+```
+
+现在这种情况退回**一次性内存织入**（`eval`）：本次请求照常拿到代理对象、通知照常执行，
+代价只是这一次没吃到 OPcache。文件完好可读时仍然走落盘路径，行为不变。
+
+**2. 同名切面经类名只登记一次**
+
+`registerAspects()` 的类名入口现在按「同名只算一次」处理，先到先得。
+框架侧 `AopServiceProvider` 会把「配置里显式登记的类名」与「目录扫描出的类名」拼成一份列表，
+同一切面既写在 `config/aop.php` 里又躺在扫描目录中时就会出现两次——两个类名各自 `new` 一个实例，
+编译出两份逐条相同的通知，被代理方法每次调用都把同一段切面逻辑跑两遍（日志双写、缓存双扣、事务嵌套）。
+实测重复登记一次即 `通知触发次数 = 2`，现在恒为 1。
+
+按类名去重**只作用于类名入口**：传入实例仍按实例身份去重，
+同一切面类的两个不同实例（例如两个 `LoggingAspect` 各挂一个 logger 做双通道输出）依然是两个切面。
+
+```php
+$kernel->registerAspects([LoggingAspect::class, LoggingAspect::class]); // 只登记一次
+$kernel->registerAspects([new LoggingAspect($a), new LoggingAspect($b)]); // 两个都保留
+```
+
+> 带前导反斜杠的写法（`'\app\aspects\LoggingAspect'`，手写配置里常见）会先归一化再比对，不会绕过这道闸。
+
 ### 声明式关注点（#[Log] / #[Cache] / #[Transactional]）
 
 v3.3 起，除了手写切面 + 切入点表达式，还可以直接用声明式注解把三类横切关注点标注在业务方法（或类）上，由内置元切面自动织入——无需写一行切入点表达式。
