@@ -1,13 +1,13 @@
-# Kode/AOP - PHP 8.3+ 轻量级 AOP 框架
+# Kode/AOP - PHP 8.4+ 轻量级 AOP 框架
 
-[![PHP Version](https://img.shields.io/badge/PHP-%3E%3D8.3-8892BF)](https://php.net/)
+[![PHP Version](https://img.shields.io/badge/PHP-%3E%3D8.4-8892BF)](https://php.net/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-green)](LICENSE)
 
-基于 PHP 8.3+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件。
+基于 PHP 8.4+ 原生属性（Attribute）实现的轻量级、高性能、高扩展性 AOP（面向切面编程）组件。
 
 ## ✨ 特性
 
-- **原生支持**：基于 PHP 8.3+ 原生属性（Attribute）实现，IDE 友好
+- **原生支持**：基于 PHP 8.4+ 原生属性（Attribute）实现，IDE 友好
 - **轻量级**：仅依赖 `kode/attributes` 包，无其他框架依赖
 - **门面 API**：一行代码完成「注册切面 + 初始化 + 取代理」（`Aop::boot()` / `Aop::proxy()` / `Aop::wrap()`）
 - **共享属性缓存**：基于 `kode/attributes` 2.x，可注入共享缓存（如 `RedisCache` / APCu）让多进程复用反射元数据，`Aop::setCache()` 一行接入
@@ -30,7 +30,7 @@
 composer require kode/aop
 ```
 
-`kode/aop` 仅依赖 `kode/attributes`、`psr/log`（PSR-3）、`psr/simple-cache`（PSR-16）与 PHP 8.3+，无任何框架耦合。声明式 `#[Log]` / `#[Cache]` 需要你提供一个 PSR-3 日志器与 PSR-16 缓存实现（Laravel / Symfony 等框架容器里通常已自带）。
+`kode/aop` 仅依赖 `kode/attributes`、`psr/log`（PSR-3）、`psr/simple-cache`（PSR-16）与 PHP 8.4+，无任何框架耦合。声明式 `#[Log]` / `#[Cache]` 需要你提供一个 PSR-3 日志器与 PSR-16 缓存实现（Laravel / Symfony 等框架容器里通常已自带）。
 
 ## 🚀 快速开始
 
@@ -608,7 +608,7 @@ composer analyse
 
 ## 📋 系统要求
 
-- PHP >= 8.3
+- PHP >= 8.4
 - Composer >= 2.0
 - kode/attributes ^2.1
 
