@@ -13,7 +13,7 @@
     ],
     "homepage": "https://github.com/kodephp/aop",
     "license": "Apache-2.0",
-    "version": "4.0.2",
+    "version": "4.0.3",
     "authors": [
         {
             "name": "Kode Team",
@@ -30,6 +30,10 @@
         "phpunit/phpunit": "^12.0",
         "phpstan/phpstan": "^2.0",
         "squizlabs/php_codesniffer": "^3.6"
+    },
+    "support": {
+        "issues": "https://github.com/kodephp/aop/issues",
+        "source": "https://github.com/kodephp/aop"
     },
     "autoload": {
         "psr-4": {
