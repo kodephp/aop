@@ -23,21 +23,25 @@ final class PdoTransactionManager implements TransactionManagerInterface
     ) {
     }
 
+    #[\Override]
     public function begin(): void
     {
         $this->pdo->beginTransaction();
     }
 
+    #[\Override]
     public function commit(): void
     {
         $this->pdo->commit();
     }
 
+    #[\Override]
     public function rollback(): void
     {
         $this->pdo->rollBack();
     }
 
+    #[\Override]
     public function transactional(callable $callback): mixed
     {
         $this->begin();
