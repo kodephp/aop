@@ -583,13 +583,7 @@ final class PointcutParser
             return false;
         }
 
-        foreach ([...array_values(class_parents($className) ?: []), ...array_values(class_implements($className) ?: [])] as $ancestor) {
-            if (Str::matchExpression($pattern, ltrim((string) $ancestor, '\\'))) {
-                return true;
-            }
-        }
-
-        return false;
+        return array_any([...array_values(class_parents($className) ?: []), ...array_values(class_implements($className) ?: [])], fn($ancestor) => Str::matchExpression($pattern, ltrim((string) $ancestor, '\\')));
     }
 
     /**

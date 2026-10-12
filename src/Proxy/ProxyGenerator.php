@@ -507,12 +507,6 @@ PHP;
             return false;
         }
 
-        foreach ($value as $item) {
-            if ($this->containsObject($item)) {
-                return true;
-            }
-        }
-
-        return false;
+        return array_any($value, fn($item) => $this->containsObject($item));
     }
 }

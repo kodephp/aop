@@ -203,13 +203,7 @@ final class AdviceRegistry
      */
     public function shouldProxy(string $className): bool
     {
-        foreach (Reflector::getPublicMethods($className) as $method) {
-            if ($this->hasAdvice($className, $method->getName())) {
-                return true;
-            }
-        }
-
-        return false;
+        return array_any(Reflector::getPublicMethods($className), fn($method) => $this->hasAdvice($className, $method->getName()));
     }
 
     /**
