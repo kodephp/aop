@@ -30,13 +30,13 @@ final readonly class Advice
      * @param class-string<Throwable> $throwable 仅 AfterThrowing 有效，限定异常类型
      */
     public function __construct(
-        public object $aspect,
-        public string $aspectMethod,
+        public private(set) object $aspect,
+        public private(set) string $aspectMethod,
         public AdviceType $type,
-        public string $pointcut,
+        public private(set) string $pointcut,
         public int $order,
-        public Closure $matcher,
-        public string $throwable = Throwable::class
+        public private(set) Closure $matcher,
+        public private(set) string $throwable = Throwable::class
     ) {
     }
 

@@ -42,7 +42,7 @@ final readonly class After
      * @param string $pointcut 切入点表达式，用于匹配目标方法
      */
     public function __construct(
-        public string $pointcut
+        public private(set) string $pointcut
     ) {
     }
 }

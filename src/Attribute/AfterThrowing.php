@@ -42,8 +42,8 @@ final readonly class AfterThrowing
      * @param class-string<\Throwable> $throwable 只处理该类型（含子类）的异常
      */
     public function __construct(
-        public string $pointcut,
-        public string $throwable = \Throwable::class
+        public private(set) string $pointcut,
+        public private(set) string $throwable = \Throwable::class
     ) {
     }
 }

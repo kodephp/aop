@@ -48,10 +48,10 @@ final readonly class Log
     public function __construct(
         public LogLevel $level = LogLevel::Info,
         public ?string $message = null,
-        public bool $logArgs = true,
-        public bool $logResult = true,
-        public bool $logException = true,
-        public bool $includeTime = true
+        public private(set) bool $logArgs = true,
+        public private(set) bool $logResult = true,
+        public private(set) bool $logException = true,
+        public private(set) bool $includeTime = true
     ) {
     }
 }

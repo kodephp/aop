@@ -24,9 +24,9 @@ final readonly class AdviceSet
      */
     public function __construct(
         public array $before = [],
-        public array $around = [],
-        public array $afterReturning = [],
-        public array $afterThrowing = [],
+        public private(set) array $around = [],
+        public private(set) array $afterReturning = [],
+        public private(set) array $afterThrowing = [],
         public array $after = []
     ) {
     }
