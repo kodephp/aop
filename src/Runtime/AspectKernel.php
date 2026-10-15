@@ -66,7 +66,7 @@ class AspectKernel implements AspectKernelInterface
     /**
      * 原始类反射缓存
      *
-     * @var array<string, ReflectionClass>
+     * @var array<string, ReflectionClass<object>>
      */
     protected array $classCache = [];
 
@@ -410,6 +410,8 @@ class AspectKernel implements AspectKernelInterface
 
     /**
      * 带缓存的类反射
+     *
+     * @return ReflectionClass<object>
      */
     protected function reflectClass(string $className): ReflectionClass
     {

@@ -35,6 +35,7 @@ class Reflector
      * // 使用对象实例
      * $reflection = Reflector::getClass($userService);
      * ```
+     * @return ReflectionClass<object>
      */
     public static function getClass(object|string $class): ReflectionClass
     {

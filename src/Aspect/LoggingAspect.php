@@ -117,6 +117,7 @@ final class LoggingAspect implements AspectInterface
     }
 
     /**
+     * @param  MetaList<\Kode\Attributes\Meta<object>> $metas
      * @return array<int, Log>
      */
     private function instances(MetaList $metas): array

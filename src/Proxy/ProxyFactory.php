@@ -257,6 +257,7 @@ final class ProxyFactory
      * - 组合式（final）：收集命中通知的公开方法，并补齐目标实现的全部接口方法，
      *   以满足 `implements` 契约（无通知的接口方法仅做透传转发）。
      *
+     * @param  ReflectionClass<object> $class
      * @return array<int, ReflectionMethod>
      */
     private function collectWeavableMethods(ReflectionClass $class): array
@@ -333,6 +334,7 @@ final class ProxyFactory
     /**
      * 收集参与签名的源码文件（去重、稳定排序）
      *
+     * @param  ReflectionClass<object> $class
      * @return array<int, string>
      */
     private function collectSourceFiles(ReflectionClass $class): array
@@ -465,7 +467,8 @@ final class ProxyFactory
     /**
      * 生成并载入代理类
      *
-     * @param array<int, ReflectionMethod> $methods
+     * @param  ReflectionClass<object> $class
+     * @param  array<int, ReflectionMethod> $methods
      */
     private function materialize(ReflectionClass $class, string $shortName, string $proxyClass, array $methods): void
     {

@@ -36,7 +36,7 @@ final class ProxyGenerator
     /**
      * 生成代理类源码
      *
-     * @param ReflectionClass $class 目标类
+     * @param ReflectionClass<object> $class 目标类
      * @param string $shortName 代理类短名（不含命名空间）
      * @param array<int, ReflectionMethod> $methods 需要生成的方法（含 adviced 与接口方法）
      * @param bool $withOpenTag 是否输出 `<?php` 开头（写文件时需要）
@@ -101,6 +101,7 @@ PHP;
     /**
      * 渲染目标类实现的全部接口列表（含 ProxyInterface 之前的前缀逗号处理）
      *
+     * @param  ReflectionClass<object> $class
      * @return string 例如 `\\Foo\\Bar, ` 或空串
      */
     private function renderInterfaces(ReflectionClass $class): string
@@ -249,6 +250,7 @@ PHP;
     /**
      * 校验目标类是否可被代理
      *
+     * @param  ReflectionClass<object> $class
      * @throws AopException 不可代理时抛出
      */
     public function assertProxyable(ReflectionClass $class): void
@@ -277,6 +279,8 @@ PHP;
     /**
      * 生成单个代理方法
      *
+     * @param ReflectionClass<object> $class
+     * @param ReflectionMethod $method
      * @param bool $composition 组合式代理时，回调目标的包装实例而非 parent::
      */
     private function generateMethod(ReflectionClass $class, ReflectionMethod $method, bool $composition): string
@@ -324,6 +328,8 @@ PHP;
 
     /**
      * 渲染参数列表（组合/继承通用；引用参数渲染 &，不可静态还原的默认值则省略）
+     *
+     * @param ReflectionClass<object> $class
      */
     private function renderParameters(ReflectionClass $class, ReflectionMethod $method): string
     {
@@ -373,6 +379,8 @@ PHP;
 
     /**
      * 渲染返回类型声明
+     *
+     * @param ReflectionClass<object> $class
      */
     private function renderReturnType(ReflectionClass $class, ReflectionMethod $method): string
     {
@@ -383,6 +391,8 @@ PHP;
 
     /**
      * 渲染任意类型（支持可空、联合、交集与 DNF）
+     *
+     * @param ReflectionClass<object> $class
      */
     private function renderType(?ReflectionType $type, ReflectionClass $class): string
     {
@@ -433,6 +443,8 @@ PHP;
 
     /**
      * 解析单个具名类型，把 self/parent 展开为真实类名
+     *
+     * @param ReflectionClass<object> $class
      */
     private function resolveTypeName(ReflectionNamedType $type, ReflectionClass $class): string
     {

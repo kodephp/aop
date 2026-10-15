@@ -129,6 +129,7 @@ class MetadataReader
      *     echo "这是一个切面类，优先级: {$aspect->priority}";
      * }
      * ```
+     * @param  ReflectionClass<object> $class
      */
     public static function getAspect(ReflectionClass $class): ?Aspect
     {

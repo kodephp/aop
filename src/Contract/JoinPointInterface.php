@@ -38,6 +38,7 @@ interface JoinPointInterface
      * $className = $joinPoint->getClass()->getName();
      * $namespace = $joinPoint->getClass()->getNamespaceName();
      * ```
+     * @return ReflectionClass<object>
      */
     public function getClass(): ReflectionClass;
 

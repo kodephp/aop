@@ -36,7 +36,7 @@ final class AdviceExecutor
      *
      * @param AdviceSet $set 已匹配的通知集合
      * @param object $target 目标对象（代理实例）
-     * @param ReflectionClass $class 原始类反射对象
+     * @param ReflectionClass<object> $class 原始类反射对象
      * @param ReflectionMethod $method 目标方法反射对象
      * @param array<int|string, mixed> $arguments 调用参数
      * @param Closure $invoker 真正执行目标方法的闭包，签名为 fn(mixed ...$args): mixed

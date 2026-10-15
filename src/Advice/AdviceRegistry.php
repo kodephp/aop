@@ -53,7 +53,7 @@ final class AdviceRegistry
     /**
      * 切面元数据缓存（兼容旧 API）
      *
-     * @var array<string, array{class: ReflectionClass, methods: array<string, array<string, mixed>>}>
+     * @var array<string, array{class: ReflectionClass<object>, methods: array<string, array<string, mixed>>}>
      */
     private array $metadata = [];
 

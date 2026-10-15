@@ -36,7 +36,7 @@ class JoinPoint implements JoinPointInterface
     protected ?Throwable $exception = null;
 
     /**
-     * @param ReflectionClass $class 目标类的反射对象
+     * @param ReflectionClass<object> $class 目标类的反射对象
      * @param ReflectionMethod $method 目标方法的反射对象
      * @param object $object 目标对象实例
      * @param array<int|string, mixed> $arguments 方法参数数组
@@ -56,6 +56,8 @@ class JoinPoint implements JoinPointInterface
 
     /**
      * {@inheritDoc}
+     *
+     * @return ReflectionClass<object>
      */
     #[\Override]
     public function getClass(): ReflectionClass

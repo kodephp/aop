@@ -21,6 +21,8 @@ final class MatchContext
 {
     /**
      * 类反射对象缓存
+     *
+     * @var ReflectionClass<object>|null
      */
     private ?ReflectionClass $classReflection = null;
 
@@ -63,6 +65,8 @@ final class MatchContext
 
     /**
      * 获取类反射对象（惰性解析，失败返回 null）
+     *
+     * @return ReflectionClass<object>|null
      */
     public function class(): ?ReflectionClass
     {
